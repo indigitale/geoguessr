@@ -1,0 +1,20 @@
+# GeoDuello dietro Traefik (configurazione dinamica su file).
+# Traefik gestisce i WebSocket da solo, non serve nulla di speciale.
+
+http:
+  routers:
+    geoduello:
+      rule: "Host(`geoduello.tuodominio.it`)"
+      service: geoduello
+      entryPoints: [websecure]
+      tls:
+        certResolver: letsencrypt
+
+  services:
+    geoduello:
+      loadBalancer:
+        servers:
+          - url: "http://192.168.1.50:3000"
+        # la partita puo' restare ferma fra un round e l'altro
+        responseForwarding:
+          flushInterval: 100ms

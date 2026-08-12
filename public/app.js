@@ -1,0 +1,1469 @@
+'use strict';
+
+/* ------------------------------------------------------------------ util */
+
+// Registro degli errori del browser. Serve a una cosa sola: se il panorama
+// non parte, il giocatore deve poter LEGGERE il motivo invece di guardare un
+// rettangolo nero, e poterlo copiare per farcelo sapere.
+const REGISTRO = [];
+function annota(testo) {
+  const t = String(testo).slice(0, 300);
+  if (REGISTRO[REGISTRO.length - 1] === t) return; // niente ripetizioni
+  REGISTRO.push(t);
+  if (REGISTRO.length > 12) REGISTRO.shift();
+}
+window.addEventListener('error', (e) => {
+  annota(e.message + (e.filename ? ` (${String(e.filename).split('/').pop()}:${e.lineno})` : ''));
+});
+window.addEventListener('unhandledrejection', (e) => {
+  annota('Promessa rifiutata: ' + (e.reason && e.reason.message ? e.reason.message : e.reason));
+});
+console.error = ((originale) => function (...a) {
+  annota(a.map((x) => (x && x.message) ? x.message : String(x)).join(' '));
+  return originale.apply(console, a);
+})(console.error);
+
+const $ = (id) => document.getElementById(id);
+const el = (sel, root = document) => root.querySelector(sel);
+const els = (sel, root = document) => [...root.querySelectorAll(sel)];
+
+function show(screenId) {
+  els('.screen').forEach((s) => s.classList.toggle('active', s.id === screenId));
+  S.screen = screenId;
+}
+
+/**
+ * Un lampo colorato sul bordo dello schermo. Serve nei momenti in cui il
+ * giocatore sta guardando il panorama e non la barra in alto: un avviso
+ * scritto non lo vedrebbe.
+ */
+function lampeggia(tipo) {
+  const f = $('flash');
+  if (!f) return;
+  f.className = 'flash ' + tipo;
+  f.hidden = false;
+  // riavvia l'animazione anche se era gia` in corso
+  void f.offsetWidth;
+  f.classList.add('vai');
+  clearTimeout(lampeggia._t);
+  lampeggia._t = setTimeout(() => { f.hidden = true; f.classList.remove('vai'); }, 900);
+}
+
+function toast(msg, ms = 2600) {
+  const t = $('toast');
+  t.textContent = msg;
+  t.hidden = false;
+  clearTimeout(toast._t);
+  toast._t = setTimeout(() => (t.hidden = true), ms);
+}
+
+function fmtDist(km) {
+  if (km == null) return '—';
+  if (km < 1) return `${Math.round(km * 1000)} m`;
+  if (km < 10) return `${km.toFixed(2)} km`;
+  if (km < 100) return `${km.toFixed(1)} km`;
+  return `${Math.round(km).toLocaleString('it-IT')} km`;
+}
+
+function fmtClock(ms) {
+  const s = Math.max(0, Math.ceil(ms / 1000));
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+}
+
+const SCOPE_LABEL = { mondo: 'Mondo', europa: 'Europa', italia: 'Italia' };
+const AVATARS = ['🦊', '🐧', '🐼', '🦁', '🐸', '🦉', '🐙', '🦄', '🚀', '⚽', '🍕', '👑'];
+
+/* ----------------------------------------------------------------- stato */
+
+const S = {
+  ws: null,
+  playerId: localStorage.getItem('gd_playerId') || null,
+  name: localStorage.getItem('gd_name') || '',
+  gate: '',
+  room: null,
+  code: null,
+  screen: 'screen-home',
+  // round corrente
+  round: null,
+  startImageId: null,
+  guess: null,          // {lat,lng} scelta locale non ancora confermata
+  confirmed: false,
+  clockOffset: 0,       // serverNow - clientNow
+  deadline: null,
+  tickHandle: null,
+  // mappe
+  miniMap: null,
+  miniMarker: null,
+  revealMap: null,
+  revealLayer: null,
+  viewer: null,
+  reconnectDelay: 800,
+  wantOpen: false,
+};
+
+const isHost = () => S.room && S.room.hostId === S.playerId;
+
+/* ------------------------------------------------------------ websocket */
+
+function wsUrl() {
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  return `${proto}//${location.host}/ws`;
+}
+
+function connect(onOpen) {
+  if (S.ws && (S.ws.readyState === 0 || S.ws.readyState === 1)) {
+    if (S.ws.readyState === 1) onOpen && onOpen();
+    else S.ws.addEventListener('open', () => onOpen && onOpen(), { once: true });
+    return;
+  }
+  S.wantOpen = true;
+  const ws = new WebSocket(wsUrl());
+  S.ws = ws;
+
+  ws.onopen = () => {
+    S.reconnectDelay = 800;
+    onOpen && onOpen();
+  };
+  ws.onmessage = (ev) => {
+    let msg;
+    try { msg = JSON.parse(ev.data); } catch { return; }
+    handle(msg);
+  };
+  ws.onclose = () => {
+    if (!S.wantOpen) return;
+    if (S.code && S.screen !== 'screen-home') {
+      toast('Connessione persa, riprovo…');
+      setTimeout(() => {
+        connect(() => send({ type: 'join', code: S.code, name: S.name, playerId: S.playerId, gate: S.gate }));
+      }, S.reconnectDelay);
+      S.reconnectDelay = Math.min(8000, S.reconnectDelay * 1.7);
+    }
+  };
+  ws.onerror = () => {};
+}
+
+function send(msg) {
+  if (S.ws && S.ws.readyState === 1) S.ws.send(JSON.stringify(msg));
+}
+
+setInterval(() => send({ type: 'ping' }), 25000);
+
+/* ---------------------------------------------------------- messaggi in */
+
+function handle(msg) {
+  switch (msg.type) {
+    case 'joined':
+      S.rientroAutomatico = false;
+      S.playerId = msg.playerId;
+      S.code = msg.code;
+      localStorage.setItem('gd_playerId', msg.playerId);
+      localStorage.setItem('gd_name', S.name);
+      history.replaceState(null, '', `?c=${msg.code}`);
+      break;
+
+    case 'state':
+      S.room = msg.room;
+      renderRoom();
+      break;
+
+    case 'round':
+      startRound(msg);
+      break;
+
+    case 'deadline':
+      S.clockOffset = (msg.now || Date.now()) - Date.now();
+      S.deadline = msg.deadline;
+      startTicker();
+      if (msg.sprint) {
+        toast(`${msg.by} ha risposto: hai ${msg.seconds} secondi!`, 3500);
+        $('hud-timer').classList.add('urgent');
+      }
+      break;
+
+    case 'guessed':
+      if (msg.playerId !== S.playerId && S.screen === 'screen-play') {
+        lampeggia('bandiera');
+        Suoni.bandiera();
+        toast(`${msg.name} ha piazzato la bandiera! ${msg.quanti}/${msg.attesi}`, 3000);
+      }
+      break;
+
+    case 'aiutino': {
+      const b = $('btn-aiutino');
+      b.classList.remove('conferma');
+      b.classList.add('usato');
+      b.textContent = '\u{1F4A1} ' + msg.indizio;
+      Suoni.rivela();
+      toast('Indizio: ' + msg.indizio, 4000);
+      break;
+    }
+
+    case 'reveal':
+      showReveal(msg);
+      break;
+
+    case 'spareggio': {
+      const nomi = (msg.fra || []).map((f) => `${f.avatar || ''} ${f.name}`).join(' e ');
+      $('reveal-title').textContent = 'Parità!';
+      $('reveal-place').textContent = `Spareggio fra ${nomi}: vince chi va più vicino.`;
+      $('btn-next').textContent = 'Gioca lo spareggio';
+      $('btn-next').disabled = false;
+      Suoni.rivela();
+      lampeggia('tempo');
+      break;
+    }
+
+    case 'final':
+      showFinal(msg);
+      break;
+
+    case 'error':
+      if (S.rientroAutomatico) {
+        S.rientroAutomatico = false;
+        show('screen-home');
+        $('home-err').textContent = msg.message;
+        $('home-err').hidden = false;
+        break;
+      }
+      if (S.screen === 'screen-home') {
+        $('home-err').textContent = msg.message;
+        $('home-err').hidden = false;
+      } else {
+        toast(msg.message, 4200);
+      }
+      break;
+
+    case 'pong':
+    default:
+      break;
+  }
+}
+
+/* ------------------------------------------------------------ rendering */
+
+function renderRoom() {
+  const r = S.room;
+  if (!r) return;
+
+  // lobby
+  $('lobby-code').textContent = r.code;
+  renderInvite(r.code);
+
+  const ul = $('lobby-players');
+  ul.innerHTML = '';
+  const ospite = isHost();
+  r.players.forEach((p) => {
+    const li = document.createElement('li');
+    const van = p.vantaggio || 0;
+    const etichetta = van ? `<span class="van-tag">vantaggio +${Math.round(van * 100)}%</span>` : '';
+    li.innerHTML =
+      '<div class="riga">' +
+      `<span class="dot${p.connected ? '' : ' off'}" style="background:${p.connected ? (p.colore || 'var(--accent)') : '#55606f'}"></span>` +
+      `<span class="av">${p.avatar || ''}</span>` +
+      `<span>${escapeHtml(p.name)}</span>` + etichetta +
+      `<span class="tag">${p.id === r.hostId ? 'host' : ''}${p.id === S.playerId ? (p.id === r.hostId ? ' · tu' : 'tu') : ''}</span>` +
+      '</div>';
+
+    // Solo chi ospita puo` regolare il vantaggio, e solo prima di iniziare.
+    if (ospite && r.phase === 'lobby') {
+      const box = document.createElement('div');
+      box.className = 'vantaggio';
+      box.innerHTML = '<div class="chips">' + [0, 0.15, 0.3, 0.5]
+        .map((v) => `<button class="chip${v === van ? ' active' : ''}" data-v="${v}">` +
+          (v ? `+${Math.round(v * 100)}%` : 'pari') + '</button>')
+        .join('') + '</div>';
+      box.querySelectorAll('.chip').forEach((c) => {
+        c.addEventListener('click', () =>
+          send({ type: 'vantaggio', giocatore: p.id, valore: Number(c.dataset.v) }));
+      });
+      li.appendChild(box);
+    }
+    ul.appendChild(li);
+  });
+
+  const host = isHost();
+  $('lobby-settings').hidden = false;
+  els('#lob-scope .chip').forEach((c) => c.classList.toggle('active', c.dataset.v === r.scope));
+  els('#lob-rounds .chip').forEach((c) => c.classList.toggle('active', +c.dataset.v === r.rounds));
+  els('#lob-timer .chip').forEach((c) => c.classList.toggle('active', +c.dataset.v === r.timer));
+  ['lob-scope', 'lob-rounds', 'lob-timer'].forEach((id) => $(id).classList.toggle('locked', !host));
+
+  $('btn-start').hidden = !host;
+  $('btn-start').disabled = r.players.length < 2;
+  $('lobby-err').hidden = !r.error;
+  if (r.error) $('lobby-err').textContent = r.error;
+
+  $('lobby-info').textContent = host
+    ? (r.players.length < 2 ? 'Aspetta che entri almeno un altro giocatore.' : 'Puoi iniziare quando vuoi.')
+    : 'In attesa che l’host avvii la partita.';
+
+  // pulsanti host nelle altre schermate
+  $('btn-next').hidden = !host;
+  $('btn-again').hidden = !host;
+  $('reveal-info').textContent = host ? '' : 'In attesa dell’host per il prossimo round.';
+  $('final-info').textContent = host ? '' : 'Solo l’host può avviare una nuova partita.';
+
+  // Rientrando a meta` round: se avevamo gia` risposto, l'interfaccia lo
+  // deve sapere, altrimenti offre di rispondere una seconda volta.
+  const io = r.players.find((p) => p.id === S.playerId);
+  if (r.phase === 'playing' && io && io.hasGuessed && !S.confirmed) {
+    S.confirmed = true;
+    $('btn-confirm').disabled = true;
+    $('btn-confirm').textContent = 'Scelta inviata';
+    $('waiting').hidden = false;
+  }
+
+  // stato di attesa durante il gioco
+  if (S.screen === 'screen-play' && S.confirmed) {
+    const mancano = r.waitingFor || [];
+    $('waiting-txt').textContent = mancano.length
+      ? 'In attesa di ' + mancano
+          .map((m) => m.nome + (m.collegato ? '' : ' (si sta ricollegando)'))
+          .join(', ') + '…'
+      : 'Calcolo i punteggi…';
+  }
+
+  renderAvatar(r);
+  els('#lob-crescendo .chip').forEach((c) =>
+    c.classList.toggle('active', (c.dataset.v === '1') === !!r.crescendo));
+  $('lob-crescendo').classList.toggle('locked', !host);
+
+  renderAlbo($('lobby-albo'), r.albo);
+
+  // navigazione automatica di fase
+  if (r.phase === 'lobby' && !['screen-home', 'screen-lobby'].includes(S.screen)) show('screen-lobby');
+  if (r.phase === 'lobby' && S.screen === 'screen-home') show('screen-lobby');
+  if (r.phase === 'loading') {
+    $('loading-txt').textContent = 'Cerco un posto…';
+    show('screen-loading');
+  }
+}
+
+/** Selettore del simbolo personale: ognuno sceglie il proprio. */
+function renderAvatar(r) {
+  const io = r.players.find((p) => p.id === S.playerId);
+  const presi = new Set(r.players.filter((p) => p.id !== S.playerId).map((p) => p.avatar));
+  const box = $('opt-avatar');
+  const firma = AVATARS.map((a) => (presi.has(a) ? 'x' : a)).join('') + (io ? io.avatar : '');
+  if (box.dataset.firma === firma) return; // niente ridisegni inutili
+  box.dataset.firma = firma;
+  box.innerHTML = '';
+  for (const a of AVATARS) {
+    const b = document.createElement('button');
+    b.className = 'chip' + (io && io.avatar === a ? ' active' : '');
+    b.textContent = a;
+    b.disabled = presi.has(a);
+    b.style.opacity = presi.has(a) ? '.3' : '';
+    b.addEventListener('click', () => send({ type: 'avatar', avatar: a }));
+    box.appendChild(b);
+  }
+}
+
+const ON_LOCALHOST = ['localhost', '127.0.0.1', '::1', ''].includes(location.hostname);
+
+/**
+ * Link d'invito e QR. Se il gioco e' aperto su localhost, quel link sul
+ * telefono non porterebbe da nessuna parte: si usa allora l'indirizzo di rete
+ * che il server ci ha comunicato.
+ */
+function renderInvite(code) {
+  const lan = S.lanUrls && S.lanUrls[0];
+  const base = ON_LOCALHOST && lan ? lan : location.origin;
+  const link = `${base}/?c=${code}`;
+  $('lobby-link').value = link;
+
+  const hint = $('lan-hint');
+  if (ON_LOCALHOST && !lan) {
+    hint.hidden = false;
+    hint.textContent =
+      'Hai aperto il gioco su localhost e non risulta nessuna rete locale: ' +
+      'questo link funziona solo su questo computer.';
+  } else {
+    hint.hidden = true;
+  }
+
+  const box = $('lobby-qr');
+  if (typeof qrcode !== 'function') {
+    $('qrwrap').hidden = true;
+    return;
+  }
+  if (box.dataset.link === link) return; // gia' disegnato per questo link
+  try {
+    const q = qrcode(0, 'M'); // versione automatica, correzione media
+    q.addData(link);
+    q.make();
+    box.innerHTML = q.createImgTag(6, 0);
+    box.dataset.link = link;
+    $('qrwrap').hidden = false;
+  } catch {
+    $('qrwrap').hidden = true;
+  }
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, (c) =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+/* --------------------------------------------------------------- round */
+
+function startRound(msg) {
+  S.round = msg;
+  S.guess = null;
+  S.confirmed = false;
+  S.startImageId = msg.imageId;
+  S.thumbUrl = msg.thumbUrl || null;
+  S.semplice = false;
+  clearTimeout(S.aiutinoTimer);
+  const ba = $('btn-aiutino');
+  ba.className = 'hud-pill aiutino';
+  ba.textContent = '\u{1F4A1} Aiutino';
+  S.clockOffset = (msg.now || Date.now()) - Date.now();
+  S.deadline = msg.deadline;
+
+  $('hud-round').textContent = `Round ${msg.roundIndex + 1}/${msg.rounds}`;
+  $('hud-scope').textContent = SCOPE_LABEL[msg.scope] || '';
+  $('waiting').hidden = true;
+  $('btn-force').hidden = true;
+  clearTimeout(S.forceTimer);
+  // I comandi di movimento ripartono sempre attivi, qualunque cosa sia
+  // successa nel round precedente.
+  S.moveLock = 0;
+  S.moveGen = (S.moveGen || 0) + 1; // invalida eventuali movimenti in sospeso
+  for (const id of ['btn-fwd', 'btn-back', 'btn-zoomout']) {
+    $(id).disabled = false;
+    $(id).classList.remove('moving');
+  }
+  resetVista(); // ogni round riparte con la visuale a posto
+  const btn = $('btn-confirm');
+  btn.disabled = true;
+  btn.textContent = 'Metti il segnalino';
+
+  show('screen-play');
+  toggleMap(false); // ogni round riparte con la mappa piccola
+  ensureViewer(msg.token, msg.imageId);
+  ensureMiniMap();
+  if (S.miniMarker) { S.miniMap.removeLayer(S.miniMarker); S.miniMarker = null; }
+  S.miniMap.setView([20, 0], msg.scope === 'italia' ? 5 : msg.scope === 'europa' ? 3 : 1);
+  setTimeout(() => S.miniMap.invalidateSize(), 60);
+
+  startTicker();
+}
+
+function startTicker() {
+  clearInterval(S.tickHandle);
+  const pill = $('hud-timer');
+  const conto = $('countdown');
+  conto.hidden = true;
+  pill.classList.remove('urgent');
+  S.ultimoSecondo = null;
+
+  if (!S.deadline) { pill.hidden = true; return; }
+  pill.hidden = false;
+
+  const tick = () => {
+    const left = S.deadline - (Date.now() + S.clockOffset);
+    pill.textContent = fmtClock(left);
+    pill.classList.toggle('urgent', left < 20000);
+
+    const secondi = Math.ceil(left / 1000);
+
+    // Ultimi dieci secondi: numerone al centro dello schermo e un bip al
+    // secondo. Mentre si guarda il panorama, la pillola in alto non la vede
+    // nessuno.
+    if (left > 0 && secondi <= 10) {
+      conto.hidden = false;
+      conto.textContent = secondi;
+      if (secondi !== S.ultimoSecondo) {
+        conto.classList.remove('batti');
+        void conto.offsetWidth;
+        conto.classList.add('batti');
+        Suoni.bip(secondi <= 3);
+        if (secondi <= 3) lampeggia('tempo');
+      }
+    } else {
+      conto.hidden = true;
+    }
+    S.ultimoSecondo = secondi;
+
+    if (left <= 0) {
+      clearInterval(S.tickHandle);
+      pill.textContent = '0:00';
+      conto.hidden = true;
+    }
+  };
+  tick();
+  S.tickHandle = setInterval(tick, 250);
+}
+
+/* ------------------------------------------------------------- mapillary */
+
+function panoError(html) {
+  const box = $('panoerr');
+  box.innerHTML = html;
+  box.hidden = false;
+}
+function panoOk() {
+  $('panoerr').hidden = true;
+}
+
+/**
+ * MODALITA` SEMPLICE — il piano B.
+ *
+ * Mostra la foto panoramica come immagine, trascinabile col dito o col mouse.
+ * Niente WebGL, niente MapillaryJS, niente memoria video: funziona ovunque
+ * funzioni un <img>. Si perde il camminare lungo la strada, ma si continua a
+ * guardarsi attorno e a giocare, che e` cio` che conta.
+ */
+function modalitaSemplice(url, motivo) {
+  if (!url) {
+    panoError('Il panorama non si carica e non ho una foto di riserva per questo round.');
+    return false;
+  }
+  distruggiViewer();
+  S.semplice = true;
+  panoOk();
+
+  const box = $('pano');
+  box.innerHTML =
+    '<div class="semplice-wrap"><img id="pano-img" alt="Panorama del luogo" draggable="false"></div>' +
+    '<div class="semplice-nota">modalita` semplice</div>';
+  const img = $('pano-img');
+  img.src = url;
+  img.onerror = () => panoError(
+    'Nemmeno la foto di riserva si scarica. Apri la ' +
+    '<a href="/diagnostica.html" target="_blank" style="color:var(--blue)">diagnostica</a> ' +
+    'su questo dispositivo.'
+  );
+
+  // trascinamento orizzontale: e` un equirettangolare, scorrerlo equivale a
+  // girarsi su se stessi
+  let premuto = false;
+  let partenzaX = 0;
+  let partenzaScroll = 0;
+  const wrap = box.querySelector('.semplice-wrap');
+  const giu = (x) => { premuto = true; partenzaX = x; partenzaScroll = wrap.scrollLeft; };
+  const muovi = (x) => { if (premuto) wrap.scrollLeft = partenzaScroll - (x - partenzaX); };
+  const su = () => { premuto = false; };
+  wrap.addEventListener('pointerdown', (e) => giu(e.clientX));
+  wrap.addEventListener('pointermove', (e) => muovi(e.clientX));
+  wrap.addEventListener('pointerup', su);
+  wrap.addEventListener('pointerleave', su);
+  img.addEventListener('load', () => {
+    // parte dal centro dell'immagine, non dal bordo
+    wrap.scrollLeft = (wrap.scrollWidth - wrap.clientWidth) / 2;
+  });
+
+  for (const id of ['btn-fwd', 'btn-back', 'btn-zoomout']) $(id).disabled = true;
+  if (motivo) toast('Panorama 3D non disponibile: passo alla modalita` semplice.', 4000);
+  return true;
+}
+
+/** Chiude il visore e libera la memoria della scheda grafica. */
+function distruggiViewer() {
+  clearInterval(S.zoomWatch);
+  S.zoomWatch = null;
+  clearTimeout(S.panoWatch);
+  if (S.viewer) {
+    try { S.viewer.remove(); } catch { /* gia` chiuso */ }
+    S.viewer = null;
+  }
+  const c = $('pano');
+  if (c) c.innerHTML = '';
+}
+
+/**
+ * Sui telefoni la memoria della scheda grafica finisce e il browser butta via
+ * il contesto WebGL: da quel momento resta tutto nero. Qui lo si intercetta e
+ * si ricostruisce il visore una volta sola, senza far accorgere di niente.
+ */
+function sorvegliaContesto(token, imageId) {
+  const tela = $('pano').querySelector('canvas');
+  if (!tela) return;
+  tela.addEventListener('webglcontextlost', (e) => {
+    e.preventDefault();
+    if (S.contestoRipreso) {
+      return panoError('La grafica 3D di questo dispositivo si e’ arresa. Prova a chiudere le altre schede del browser e ricarica.');
+    }
+    S.contestoRipreso = true;
+    panoError('Recupero il panorama…');
+    setTimeout(() => ensureViewer(token, imageId), 400);
+  }, { once: true });
+}
+
+function ensureViewer(token, imageId) {
+  panoOk();
+  if (!window.mapillary) {
+    panoError('Il visore Mapillary non si è caricato. Ricarica la pagina.');
+    return;
+  }
+
+  distruggiViewer();
+
+  try {
+    S.viewer = new mapillary.Viewer({
+      accessToken: token,
+      container: 'pano',
+      imageId,
+      imageTiling: true, // tessere ad alta risoluzione quando si zooma
+      component: { cover: false },
+    });
+    S.viewer.on('image', () => { panoOk(); vigilaZoom(); });
+    // Lo zoom cambia anche con le pinzate: il pulsante per uscirne deve
+    // accendersi comunque, non solo quando lo si usa.
+    S.zoomWatch = setInterval(vigilaZoom, 1200);
+    sorvegliaContesto(token, imageId);
+  } catch (e) {
+    panoError(`Il visore non è partito: ${escapeHtml(e.message || e)}`);
+    return;
+  }
+
+  // Cane da guardia: se dopo qualche secondo non c'e' ancora un'immagine non
+  // si lascia il giocatore davanti a un rettangolo nero. Prima si passa alla
+  // modalita` semplice, che quasi sempre funziona; solo se fallisce anche
+  // quella si mostra l'errore, con il registro per capire cosa e` successo.
+  clearTimeout(S.panoWatch);
+  S.panoWatch = setTimeout(async () => {
+    let caricata = false;
+    try {
+      const im = await S.viewer.getImage();
+      caricata = !!(im && im.id);
+    } catch { /* non caricata */ }
+    if (caricata) return panoOk();
+    if (modalitaSemplice(S.thumbUrl, 'il visore 3D non ha caricato')) return;
+    mostraGuasto('Il panorama non si carica su questo dispositivo.');
+  }, 8000);
+}
+
+/** Schermata di guasto con il registro degli errori, copiabile. */
+function mostraGuasto(titolo) {
+  const righe = REGISTRO.length
+    ? REGISTRO.slice(-5).map((r) => `<div class="riga-log">${escapeHtml(r)}</div>`).join('')
+    : '<div class="riga-log">nessun errore registrato dal browser</div>';
+  panoError(
+    `${escapeHtml(titolo)}<div class="log">${righe}</div>` +
+    '<button id="btn-copia-log" class="ghost" style="width:auto;margin-top:10px">Copia il dettaglio</button> ' +
+    '<a href="/diagnostica.html" target="_blank" style="color:var(--blue);font-size:13px">diagnostica</a>'
+  );
+  const b = $('btn-copia-log');
+  if (b) b.addEventListener('click', () => {
+    const testo = [titolo, navigator.userAgent, ...REGISTRO].join('\n');
+    navigator.clipboard.writeText(testo)
+      .then(() => toast('Dettaglio copiato: incollalo nella chat'))
+      .catch(() => toast('Copia non riuscita, fai uno screenshot'));
+  });
+}
+
+/* ------------------------------------------------- spostarsi nel panorama */
+
+const MOVE_TIMEOUT_MS = 5000; // oltre questo, MapillaryJS non ce la fa
+const MOVE_LOCK_MS = 800;     // anti doppio-tap, non attesa del movimento
+
+function conScadenza(promessa, ms) {
+  return Promise.race([
+    Promise.resolve(promessa),
+    new Promise((_, rifiuta) => setTimeout(() => rifiuta(new Error('troppo lento')), ms)),
+  ]);
+}
+
+/**
+ * Next e Prev seguono la sequenza cosi' come e' stata ripresa, NON la
+ * direzione in cui stai guardando: se ti giri, "il prossimo scatto" ti manda
+ * all'indietro rispetto a quello che vedi. Qui si confronta la bussola del
+ * visore con quella dello scatto per capire da che parte stai guardando, e si
+ * sceglie di conseguenza.
+ */
+async function versoSequenza(forward) {
+  const D = mapillary.NavigationDirection;
+  try {
+    const [bussola, img] = await Promise.all([
+      Promise.resolve(S.viewer.getBearing()),
+      Promise.resolve(S.viewer.getImage()),
+    ]);
+    const scatto = img?.computedCompassAngle ?? img?.compassAngle;
+    if (typeof bussola === 'number' && typeof scatto === 'number') {
+      // differenza con segno riportata in [-180, 180]
+      const delta = Math.abs(((bussola - scatto + 540) % 360) - 180);
+      const guardaNelVersoDiMarcia = delta <= 90;
+      if (forward) return guardaNelVersoDiMarcia ? D.Next : D.Prev;
+      return guardaNelVersoDiMarcia ? D.Prev : D.Next;
+    }
+  } catch { /* niente bussola: si tira a indovinare */ }
+  return forward ? D.Next : D.Prev;
+}
+
+/**
+ * Un passo avanti o indietro rispetto a DOVE STAI GUARDANDO.
+ *
+ * Si prova prima StepForward/StepBackward, che tengono conto dello sguardo.
+ * Se in quella direzione non c'e' nessuno scatto vicino si ripiega sulla
+ * sequenza, scegliendo pero' il verso giusto con la bussola.
+ *
+ * Il blocco anti doppio-tap scade a tempo e NON aspetta la fine del
+ * movimento: se MapillaryJS resta appeso, i pulsanti tornano vivi da soli
+ * invece di restare muti per il resto della partita.
+ */
+async function panoMove(forward) {
+  if (!S.viewer || !window.mapillary || !mapillary.NavigationDirection) return;
+  const ora = Date.now();
+  if (ora < (S.moveLock || 0)) return;
+  S.moveLock = ora + MOVE_LOCK_MS;
+
+  const D = mapillary.NavigationDirection;
+  const primo = forward ? D.StepForward : D.StepBackward;
+  const tentativi = [primo, await versoSequenza(forward)];
+  const btn = forward ? $('btn-fwd') : $('btn-back');
+  btn.classList.add('moving');
+
+  // Se nel frattempo cambia il round, questa chiamata deve smettere di agire:
+  // una richiesta rimasta appesa non deve spostare il panorama del round dopo.
+  const gen = S.moveGen || 0;
+
+  try {
+    for (const d of tentativi) {
+      if (gen !== (S.moveGen || 0)) return;
+      try {
+        await conScadenza(S.viewer.moveDir(d), MOVE_TIMEOUT_MS);
+        return;
+      } catch { /* direzione non disponibile: si prova la prossima */ }
+    }
+    if (gen !== (S.moveGen || 0)) return;
+    toast(forward ? 'Da questa parte la strada finisce qui.' : 'Sei già all’inizio della strada.');
+  } finally {
+    btn.classList.remove('moving');
+    if (gen === (S.moveGen || 0)) S.moveLock = 0;
+  }
+}
+
+/* ------------------------------------------------------------- minimappa */
+
+const TILES = 'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png';
+const TILE_ATTR = '&copy; OpenStreetMap, &copy; CARTO';
+
+function ensureMiniMap() {
+  if (S.miniMap) return;
+  S.miniMap = L.map('minimap', {
+    worldCopyJump: true,
+    zoomControl: true,
+    attributionControl: true,
+  }).setView([20, 0], 1);
+  L.tileLayer(TILES, { attribution: TILE_ATTR, maxZoom: 18, subdomains: 'abcd' }).addTo(S.miniMap);
+
+  S.miniMap.on('click', (e) => {
+    if (S.confirmed) return;
+    const { lat, lng } = e.latlng;
+    S.guess = { lat, lng: ((lng + 540) % 360) - 180 };
+    if (S.miniMarker) S.miniMarker.setLatLng(e.latlng);
+    else S.miniMarker = L.marker(e.latlng, { icon: pinIcon('📍') }).addTo(S.miniMap);
+    const btn = $('btn-confirm');
+    btn.disabled = false;
+    btn.textContent = 'Conferma la scelta';
+    Suoni.tic();
+  });
+}
+
+function pinIcon(emoji, animazione = '') {
+  return L.divIcon({
+    className: '',
+    html: `<div class="pin ${animazione}">${emoji}</div>`,
+    iconSize: [26, 26],
+    iconAnchor: [13, 24],
+  });
+}
+
+/** Segnalino numerato per la mappa riepilogo di fine partita. */
+function numIcon(n) {
+  return L.divIcon({
+    className: '',
+    html: `<div class="numpin">${n}</div>`,
+    iconSize: [24, 24],
+    iconAnchor: [12, 12],
+  });
+}
+
+/* ------------------------------------------------------ animazioni base */
+
+const CALMO = window.matchMedia
+  && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+const attesa = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/** Interpola con una curva morbida: parte veloce, arriva piano. */
+const frena = (t) => 1 - Math.pow(1 - t, 3);
+
+function anima(durata, passo) {
+  return new Promise((fine) => {
+    if (CALMO) { passo(1); return fine(); }
+    const t0 = performance.now();
+    const giro = (ora) => {
+      const t = Math.min(1, (ora - t0) / durata);
+      passo(frena(t));
+      if (t < 1) requestAnimationFrame(giro);
+      else fine();
+    };
+    requestAnimationFrame(giro);
+  });
+}
+
+/** Disegna la linea dal tiro verso il punto giusto. */
+function animaLinea(mappa, da, a, colore, durata = 700) {
+  const linea = L.polyline([da, da], {
+    color: colore, weight: 3, opacity: 0.9, dashArray: '6 6',
+  }).addTo(mappa);
+  return anima(durata, (t) => {
+    linea.setLatLngs([da, [da[0] + (a[0] - da[0]) * t, da[1] + (a[1] - da[1]) * t]]);
+  }).then(() => linea);
+}
+
+/** Fa salire un numero, con un tic a ogni gradino. */
+function contaSu(nodo, valore, durata = 900, suono = true) {
+  if (valore <= 0) { nodo.textContent = '+0'; return Promise.resolve(); }
+  let ultimo = -1;
+  return anima(durata, (t) => {
+    const v = Math.round(valore * t);
+    if (v !== ultimo) {
+      nodo.textContent = `+${v.toLocaleString('it-IT')}`;
+      if (suono && v !== ultimo) Suoni.scatto(Math.floor(t * 25));
+      ultimo = v;
+    }
+  });
+}
+
+const COLORI = ['#4a9eff', '#f0a83c', '#c77dff', '#3fb950', '#f0575e', '#00d4c8'];
+
+/** Il colore del giocatore arriva dal server; se manca, si ripiega sull'ordine. */
+const coloreDi = (r, tutti) => r.colore || COLORI[tutti.indexOf(r) % COLORI.length];
+
+/* -------------------------------------------------------------- reveal */
+
+function showReveal(msg) {
+  clearInterval(S.tickHandle);
+  distruggiViewer(); // il panorama non serve piu`: libera la memoria
+  show('screen-reveal');
+
+  $('reveal-title').textContent = `Round ${msg.roundIndex + 1} di ${msg.rounds}`;
+  const luogo = msg.area ? `${msg.area.name} — ${msg.area.country}` : '';
+  $('reveal-place').innerHTML = escapeHtml(luogo) +
+    (msg.truth
+      ? ' · <a class="vaia" target="_blank" rel="noopener" ' +
+        `href="https://www.google.com/maps/@?api=1&map_action=map&center=${msg.truth.lat},${msg.truth.lng}&zoom=14">` +
+        'vai a vedere</a>'
+      : '');
+  $('btn-next').textContent = msg.spareggio ? 'Vedi chi ha vinto'
+    : msg.isLast ? 'Vedi la classifica' : 'Prossimo round';
+  $('btn-next').disabled = true;
+  $('reveal-list').innerHTML = '';
+
+  if (!S.revealMap) {
+    S.revealMap = L.map('revealmap', { worldCopyJump: true }).setView([20, 0], 2);
+    L.tileLayer(TILES, { attribution: TILE_ATTR, maxZoom: 18, subdomains: 'abcd' }).addTo(S.revealMap);
+  }
+  if (S.revealLayer) S.revealMap.removeLayer(S.revealLayer);
+  S.revealLayer = L.layerGroup().addTo(S.revealMap);
+
+  animaRivelazione(msg).catch(() => {});
+}
+
+/**
+ * Il round si chiude come una scena, non come una tabella: prima i tiri,
+ * poi il punto giusto, poi le linee, poi i punteggi dal peggiore al migliore.
+ * Sono gli stessi dati di prima, raccontati in qualche secondo.
+ */
+async function animaRivelazione(msg) {
+  const mappa = S.revealMap;
+  const truth = [msg.truth.lat, msg.truth.lng];
+  const conTiro = msg.results.filter((r) => r.guess);
+  const punti = [truth, ...conTiro.map((r) => [r.guess.lat, r.guess.lng])];
+
+  // inquadratura su tutto quello che conta
+  mappa.invalidateSize();
+  if (punti.length > 1) mappa.fitBounds(L.latLngBounds(punti).pad(0.28), { animate: false });
+  else mappa.setView(truth, 6);
+
+  // 1. i segnalini dei giocatori cadono, uno dopo l'altro
+  for (const [i, r] of conTiro.entries()) {
+    const colore = coloreDi(r, msg.results);
+    L.marker([r.guess.lat, r.guess.lng], { icon: pinIcon(r.avatar || '📍', 'cade') })
+      .addTo(S.revealLayer)
+      .bindTooltip(r.name, { permanent: false });
+    Suoni.tic();
+    if (!CALMO && i < conTiro.length - 1) await attesa(220);
+  }
+
+  await attesa(CALMO ? 0 : 350);
+
+  // 2. il punto giusto
+  L.marker(truth, { icon: pinIcon('🎯', 'sboccia') }).addTo(S.revealLayer);
+  Suoni.rivela();
+  await attesa(CALMO ? 0 : 450);
+
+  // 3. le linee si disegnano verso il punto giusto
+  await Promise.all(conTiro.map((r) => animaLinea(
+    S.revealLayer,
+    [r.guess.lat, r.guess.lng],
+    truth,
+    coloreDi(r, msg.results)
+  )));
+
+  // 4. i punteggi, dal peggiore al migliore: il vincitore si scopre per ultimo
+  const lista = $('reveal-list');
+  const ordinati = [...msg.results].reverse();
+  for (const [i, r] of ordinati.entries()) {
+    const colore = coloreDi(r, msg.results);
+    const li = document.createElement('li');
+    li.className = 'entra';
+    li.style.borderLeftColor = colore;
+    const tu = r.playerId === S.playerId ? ' (tu)' : '';
+    li.innerHTML =
+      `<span class="pts">+0</span>` +
+      `<div class="name"><span class="av">${r.avatar || ''}</span>${escapeHtml(r.name)}${tu}</div>` +
+      `<div class="meta">${r.guess ? `a ${fmtDist(r.distanceKm)} dal punto giusto` : 'nessuna risposta'}` +
+      `${r.conAiuto ? ' · 💡 con aiutino' : ''}</div>`;
+    lista.prepend(li);
+
+    if (!r.guess) { li.querySelector('.pts').textContent = '+0'; Suoni.tonfo(); }
+    else await contaSu(li.querySelector('.pts'), r.points, 850);
+
+    const ultimo = i === ordinati.length - 1;
+    if (ultimo && r.guess && r.distanceKm < 1) { li.classList.add('perfetto'); Suoni.fanfara(); }
+    if (!CALMO) await attesa(200);
+  }
+
+  $('btn-next').disabled = false;
+}
+
+/* --------------------------------------------------------------- finale */
+
+function showFinal(msg) {
+  clearInterval(S.tickHandle);
+  distruggiViewer();
+  show('screen-final');
+
+  const medaglie = ['🥇', '🥈', '🥉'];
+  const lista = $('final-list');
+  lista.innerHTML = '';
+  msg.standings.forEach((s, i) => {
+    const li = document.createElement('li');
+    if (i === 0) li.classList.add('win');
+    li.innerHTML =
+      `<span class="rank">${medaglie[i] || i + 1}</span>` +
+      `<span class="av">${s.avatar || ''}</span>` +
+      `<span>${escapeHtml(s.name)}${s.playerId === S.playerId ? ' (tu)' : ''}</span>` +
+      `<span class="pts">${s.score.toLocaleString('it-IT')}</span>`;
+    lista.appendChild(li);
+  });
+
+  const primo = msg.standings[0];
+  const pari = msg.standings.length > 1 && msg.standings[1].score === primo.score;
+  $('final-title').textContent = !primo ? 'Fine partita'
+    : pari ? 'Pareggio!' : `Vince ${primo.name}!`;
+  if (primo && !pari && primo.playerId === S.playerId) Suoni.trionfo();
+
+  // record e primati appena battuti
+  const nov = $('final-novita');
+  if (msg.novita && msg.novita.length) {
+    nov.hidden = false;
+    nov.innerHTML = '<h3>Nuovi primati</h3>' +
+      msg.novita.map((n) => `<div class="primato">🏅 ${escapeHtml(n)}</div>`).join('');
+  } else {
+    nov.hidden = true;
+  }
+
+  renderAlbo($('final-albo'), msg.albo);
+  disegnaRiepilogo(msg.history || []);
+}
+
+/** Tutta la partita su una mappa sola: dove eravate e dove avete tirato. */
+function disegnaRiepilogo(storia) {
+  if (!S.finalMap) {
+    S.finalMap = L.map('finalmap', { worldCopyJump: true }).setView([20, 0], 2);
+    L.tileLayer(TILES, { attribution: TILE_ATTR, maxZoom: 18, subdomains: 'abcd' }).addTo(S.finalMap);
+  }
+  if (S.finalLayer) S.finalMap.removeLayer(S.finalLayer);
+  S.finalLayer = L.layerGroup().addTo(S.finalMap);
+
+  const tutti = [];
+  let migliore = null;
+
+  storia.forEach((h, i) => {
+    const truth = [h.truth.lat, h.truth.lng];
+    tutti.push(truth);
+    L.marker(truth, { icon: numIcon(i + 1) })
+      .addTo(S.finalLayer)
+      .bindTooltip(h.area ? `${h.area.name} (${h.area.country})` : `Round ${i + 1}`);
+
+    (h.results || []).forEach((r, j) => {
+      if (!r.guess) return;
+      const g = [r.guess.lat, r.guess.lng];
+      const col = r.colore || COLORI[j % COLORI.length];
+      tutti.push(g);
+      L.polyline([g, truth], {
+        color: col, weight: 2, opacity: 0.55, dashArray: '4 6',
+      }).addTo(S.finalLayer);
+      L.circleMarker(g, {
+        radius: 4, color: col, fillOpacity: 0.9, weight: 1,
+      }).addTo(S.finalLayer).bindTooltip(`${r.avatar || ''} ${r.name} — ${fmtDist(r.distanceKm)}`);
+      if (!migliore || r.distanceKm < migliore.distanzaKm) {
+        migliore = { distanzaKm: r.distanceKm, punto: g, nome: r.name, round: i + 1 };
+      }
+    });
+  });
+
+  if (migliore) {
+    L.circleMarker(migliore.punto, {
+      radius: 13, color: '#ffd479', weight: 3, fill: false,
+    }).addTo(S.finalLayer).bindTooltip(
+      `Colpo migliore: ${migliore.nome}, ${fmtDist(migliore.distanzaKm)} al round ${migliore.round}`,
+      { permanent: false }
+    );
+  }
+
+  setTimeout(() => {
+    S.finalMap.invalidateSize();
+    if (tutti.length > 1) S.finalMap.fitBounds(L.latLngBounds(tutti).pad(0.2));
+    else if (tutti.length) S.finalMap.setView(tutti[0], 5);
+  }, 90);
+}
+
+/* ------------------------------------------------------------ albo d'oro */
+
+function renderAlbo(nodo, albo) {
+  if (!nodo) return;
+  if (!albo || !albo.giocatori || !albo.giocatori.length || !albo.partiteTotali) {
+    nodo.hidden = true;
+    return;
+  }
+  nodo.hidden = false;
+
+  let html = '<h3>Testa a testa</h3>';
+
+  if (albo.sfida && albo.sfida.partite) {
+    const p = albo.sfida.punteggio;
+    html += '<div class="sfida">' +
+      p.map((x) => `<div class="lato"><b>${x.vittorie}</b><span>${escapeHtml(x.nome)}</span></div>`)
+        .join('<div class="trattino">–</div>') +
+      `</div><p class="sub sfida-sub">${albo.sfida.partite} partite giocate insieme</p>`;
+  }
+
+  html += '<div class="schede">';
+  for (const g of albo.giocatori) {
+    const righe = [
+      `${g.vittorie} vittorie su ${g.partite}`,
+      `media ${g.mediaPunti.toLocaleString('it-IT')} punti`,
+    ];
+    if (g.migliorTiroKm != null) righe.push(`miglior tiro ${fmtDist(g.migliorTiroKm)}`);
+    if (g.strisciaAttuale >= 2) righe.push(`${g.strisciaAttuale} vittorie di fila`);
+    if (g.forte) righe.push(`forte in <b>${escapeHtml(g.forte.zona)}</b> (${g.forte.media})`);
+    if (g.debole) righe.push(`debole in <b>${escapeHtml(g.debole.zona)}</b> (${g.debole.media})`);
+    html += `<div class="scheda"><b>${escapeHtml(g.nome)}</b>` +
+      righe.map((r) => `<span>${r}</span>`).join('') + '</div>';
+  }
+  html += '</div>';
+
+  nodo.innerHTML = html;
+}
+
+/* ------------------------------------------------------------- home UI */
+
+let optScope = 'mondo';
+let optRounds = 5;
+let optTimer = 120;
+
+function bindChips(containerId, onPick) {
+  els(`#${containerId} .chip`).forEach((chip) => {
+    chip.addEventListener('click', () => {
+      const box = $(containerId);
+      if (box.classList.contains('locked')) return;
+      els(`#${containerId} .chip`).forEach((c) => c.classList.remove('active'));
+      chip.classList.add('active');
+      onPick(chip.dataset.v);
+    });
+  });
+}
+
+bindChips('opt-scope', (v) => (optScope = v));
+bindChips('opt-rounds', (v) => (optRounds = +v));
+bindChips('opt-timer', (v) => (optTimer = +v));
+bindChips('lob-scope', (v) => send({ type: 'settings', scope: v }));
+bindChips('lob-rounds', (v) => send({ type: 'settings', rounds: +v }));
+bindChips('lob-timer', (v) => send({ type: 'settings', timer: +v }));
+bindChips('lob-crescendo', (v) => send({ type: 'settings', crescendo: v === '1' }));
+
+els('.tab').forEach((t) => {
+  t.addEventListener('click', () => {
+    els('.tab').forEach((x) => x.classList.remove('active'));
+    t.classList.add('active');
+    els('.tabpanel').forEach((p) => p.classList.remove('active'));
+    $(`tab-${t.dataset.tab}`).classList.add('active');
+  });
+});
+
+function readName() {
+  const n = $('in-name').value.trim();
+  if (!n) {
+    $('home-err').textContent = 'Scrivi il tuo nome.';
+    $('home-err').hidden = false;
+    $('in-name').focus();
+    return null;
+  }
+  $('home-err').hidden = true;
+  S.name = n;
+  S.gate = $('in-gate').value;
+  try { sessionStorage.setItem('gd_gate', S.gate); } catch { /* niente */ }
+  localStorage.setItem('gd_name', n);
+  return n;
+}
+
+$('btn-create').addEventListener('click', () => {
+  if (!readName()) return;
+  connect(() => send({
+    type: 'create', name: S.name, gate: S.gate,
+    scope: optScope, rounds: optRounds, timer: optTimer,
+  }));
+});
+
+$('btn-join').addEventListener('click', () => {
+  if (!readName()) return;
+  const code = $('in-code').value.trim().toUpperCase();
+  if (code.length !== 4) {
+    $('home-err').textContent = 'Il codice ha 4 caratteri.';
+    $('home-err').hidden = false;
+    return;
+  }
+  S.code = code;
+  connect(() => send({ type: 'join', code, name: S.name, playerId: S.playerId, gate: S.gate }));
+});
+
+$('in-code').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('btn-join').click(); });
+$('in-name').addEventListener('keydown', (e) => {
+  if (e.key !== 'Enter') return;
+  ($('tab-entra').classList.contains('active') ? $('btn-join') : $('btn-create')).click();
+});
+
+/* ------------------------------------------------------------ lobby UI */
+
+$('btn-copy').addEventListener('click', async () => {
+  const link = $('lobby-link').value;
+  try {
+    await navigator.clipboard.writeText(link);
+    toast('Link copiato');
+  } catch {
+    $('lobby-link').select();
+    toast('Premi Ctrl+C per copiare');
+  }
+});
+
+$('btn-start').addEventListener('click', () => send({ type: 'start' }));
+$('btn-next').addEventListener('click', () => send({ type: 'next' }));
+$('btn-again').addEventListener('click', () => send({ type: 'lobby' }));
+
+function leave() {
+  S.wantOpen = false;
+  if (S.ws) S.ws.close();
+  S.ws = null; S.room = null; S.code = null;
+  clearInterval(S.tickHandle);
+  history.replaceState(null, '', '/');
+  show('screen-home');
+}
+$('btn-leave').addEventListener('click', leave);
+$('btn-leave2').addEventListener('click', leave);
+
+/* ------------------------------------------------------------- gioco UI */
+
+$('btn-confirm').addEventListener('click', () => {
+  if (S.confirmed || !S.guess) return;
+  S.confirmed = true;
+  $('btn-confirm').disabled = true;
+  $('btn-confirm').textContent = 'Scelta inviata';
+  $('waiting').hidden = false;
+  $('countdown').hidden = true;
+  Suoni.conferma();
+  send({ type: 'guess', lat: S.guess.lat, lng: S.guess.lng });
+
+  // Se l'attesa si prolunga, offri la via d'uscita: capita che l'altro abbia
+  // messo via il telefono e il server non se ne sia ancora accorto.
+  clearTimeout(S.forceTimer);
+  $('btn-force').hidden = true;
+  S.forceTimer = setTimeout(() => {
+    if (S.screen === 'screen-play' && S.confirmed) $('btn-force').hidden = false;
+  }, 12000);
+});
+
+$('btn-force').addEventListener('click', () => {
+  $('btn-force').hidden = true;
+  send({ type: 'force' });
+});
+
+function toggleMap(force) {
+  const box = $('guessbox');
+  const big = force === undefined ? !box.classList.contains('big') : force;
+  box.classList.toggle('big', big);
+  $('btn-mapsize').textContent = big ? 'Riduci' : 'Ingrandisci';
+  // Leaflet ridisegna solo se gli si dice che il contenitore e' cambiato,
+  // e va fatto a transizione finita.
+  setTimeout(() => S.miniMap && S.miniMap.invalidateSize(), 220);
+}
+
+$('btn-mapsize').addEventListener('click', () => toggleMap());
+
+function aggiornaSuoni() {
+  const on = Suoni.acceso;
+  $('btn-sound').textContent = on ? '\u{1F50A}' : '\u{1F507}';
+  $('btn-sound2').textContent = on ? '\u{1F50A} Suoni attivi' : '\u{1F507} Suoni spenti';
+}
+for (const id of ['btn-sound', 'btn-sound2']) {
+  $(id).addEventListener('click', () => { Suoni.accendi(!Suoni.acceso); aggiornaSuoni(); });
+}
+// I browser creano l'audio solo dopo un gesto dell'utente: il primo clic
+// qualunque esso sia serve a svegliarlo.
+document.addEventListener('pointerdown', () => Suoni.sveglia(), { once: true });
+aggiornaSuoni();
+
+/**
+ * Aiutino. Costa il 30% dei punti del round, quindi non deve poter partire
+ * per sbaglio: il primo tocco avverte, il secondo conferma.
+ */
+$('btn-aiutino').addEventListener('click', () => {
+  const b = $('btn-aiutino');
+  if (b.classList.contains('usato')) return;
+  if (!b.classList.contains('conferma')) {
+    b.classList.add('conferma');
+    b.textContent = 'Sicuro? costa il 30%';
+    clearTimeout(S.aiutinoTimer);
+    S.aiutinoTimer = setTimeout(() => {
+      b.classList.remove('conferma');
+      b.textContent = '\u{1F4A1} Aiutino';
+    }, 5000);
+    return;
+  }
+  clearTimeout(S.aiutinoTimer);
+  send({ type: 'aiutino' });
+});
+
+$('btn-fwd').addEventListener('click', () => panoMove(true));
+$('btn-back').addEventListener('click', () => panoMove(false));
+
+/**
+ * Safari su iOS ignora "user-scalable=no" e lascia zoomare la PAGINA con due
+ * dita. Con un'interfaccia a posizione fissa come questa, una volta zoomati i
+ * pulsanti finiscono fuori schermo e non si riesce piu' a fare niente.
+ *
+ * Gli eventi gesture* sono la sola leva che Safari offre per impedirlo. Non
+ * toccano i touchmove, quindi la pinzata continua a zoomare il panorama e la
+ * mappa, che e' quello che serve.
+ */
+// In FASE DI CATTURA, non in bolla: MapillaryJS e Leaflet fermano la
+// propagazione dei gesti, quindi un ascolto normale non li vedeva mai
+// arrivare. E` probabilmente il motivo per cui questa difesa non funzionava.
+for (const tipo of ['gesturestart', 'gesturechange', 'gestureend']) {
+  document.addEventListener(tipo, (e) => e.preventDefault(), { passive: false, capture: true });
+}
+// Doppio tocco: l'altro modo per zoomare una pagina.
+document.addEventListener('dblclick', (e) => e.preventDefault(), { passive: false, capture: true });
+
+/**
+ * Rete di sicurezza per i browser che ignorano tutto il resto: se due dita si
+ * appoggiano fuori dalle zone che gestiscono i gesti da sole (il panorama e le
+ * mappe), la pinzata viene annullata sul nascere.
+ */
+document.addEventListener('touchmove', (e) => {
+  if (e.touches.length < 2) return;
+  if (e.target.closest && e.target.closest('#pano, .leaflet-container')) return;
+  e.preventDefault();
+}, { passive: false, capture: true });
+
+/**
+ * Rimette la pagina alla scala giusta. Non esiste un'API per azzerare lo zoom
+ * del browser, ma riscrivere il meta viewport costringe Safari a rifare i
+ * conti: e' la via d'uscita per chi si e' gia' incastrato.
+ */
+function sbloccaPagina() {
+  const vp = $('viewport');
+  if (!vp) return;
+  // Il trucco sta nel CAMBIARE il contenuto: le due varianti sono entrambe
+  // valide e vietano lo zoom, ma l'alternanza forza il browser a rifare i conti.
+  const base = 'width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no';
+  vp.setAttribute('content', `${base}, minimum-scale=1`);
+  setTimeout(() => vp.setAttribute('content', `${base}, viewport-fit=cover`), 60);
+  window.scrollTo(0, 0);
+  document.documentElement.scrollLeft = 0;
+  document.documentElement.scrollTop = 0;
+}
+
+/** Riporta tutto a com'era: zoom della pagina, zoom del panorama, inquadratura. */
+async function resetVista({ tornaAlPunto = false } = {}) {
+  sbloccaPagina();
+  if (!S.viewer) return;
+  try { S.viewer.setZoom(0); } catch { /* niente zoom da azzerare */ }
+  try { S.viewer.setCenter([0.5, 0.5]); } catch { /* gia` centrata */ }
+  if (tornaAlPunto && S.startImageId) {
+    try { await S.viewer.moveTo(S.startImageId); } catch { /* immagine sparita */ }
+  }
+  vigilaZoom();
+}
+
+/**
+ * Sorveglia lo zoom della pagina. Se nonostante tutto qualcuno ci finisce
+ * dentro, compare un pulsante che riporta tutto a posto — e si riposiziona da
+ * solo per restare dentro la porzione di schermo effettivamente visibile,
+ * altrimenti sarebbe fuori portata proprio quando serve.
+ */
+(function sorvegliaZoomPagina() {
+  const vv = window.visualViewport;
+  const btn = $('btn-sblocca');
+  if (!vv || !btn) return;
+
+  const controlla = () => {
+    const zoomata = vv.scale > 1.05;
+    btn.hidden = !zoomata;
+    if (!zoomata) return;
+    // compensa scala e spostamento della finestra visibile
+    btn.style.transform =
+      `translate(calc(-50% + ${vv.offsetLeft}px), ${vv.offsetTop - (vv.height * (vv.scale - 1)) / vv.scale}px) ` +
+      `scale(${1 / vv.scale})`;
+  };
+
+  const ridisegnaMappe = () => {
+    for (const m of [S.miniMap, S.revealMap, S.finalMap]) {
+      try { m && m.invalidateSize(); } catch { /* non ancora pronta */ }
+    }
+  };
+  vv.addEventListener('resize', () => { controlla(); setTimeout(ridisegnaMappe, 120); });
+  vv.addEventListener('scroll', controlla);
+  window.addEventListener('orientationchange', () => setTimeout(ridisegnaMappe, 250));
+  window.addEventListener('pageshow', () => setTimeout(ridisegnaMappe, 120));
+  btn.addEventListener('click', () => {
+    sbloccaPagina();
+    btn.hidden = true;
+    setTimeout(() => {
+      controlla();
+      if (!btn.hidden) toast('Se resta bloccato ricarica la pagina: rientri nella partita da solo.', 6000);
+    }, 500);
+  });
+  controlla();
+})();
+
+/** Doppio tocco sul panorama: rimette tutto a posto senza cercare pulsanti. */
+(function doppioTocco() {
+  let ultimo = 0;
+  $('pano').addEventListener('pointerup', () => {
+    const ora = Date.now();
+    if (ora - ultimo < 320) { resetVista(); toast('Visuale rimessa a posto'); }
+    ultimo = ora;
+  });
+})();
+
+$('btn-zoomout').addEventListener('click', async () => {
+  if (!S.viewer) return;
+  let z = 0;
+  try { z = await Promise.resolve(S.viewer.getZoom()); } catch { /* si azzera e basta */ }
+  // Un gradino per volta, cosi` non si perde l'orientamento di colpo.
+  try { S.viewer.setZoom(Math.max(0, (typeof z === 'number' ? z : 1) - 1)); } catch { /* ignora */ }
+  vigilaZoom();
+});
+
+/** Accende il pulsante dello zoom quando serve davvero. */
+async function vigilaZoom() {
+  if (!S.viewer) return;
+  try {
+    const z = await Promise.resolve(S.viewer.getZoom());
+    $('btn-zoomout').classList.toggle('attivo', typeof z === 'number' && z > 0.05);
+  } catch { /* nessuna informazione: si lascia com'e` */ }
+}
+
+document.addEventListener('keydown', (e) => {
+  if (S.screen !== 'screen-play') return;
+  if (e.target.tagName === 'INPUT') return;
+  if (e.key === 'm' || e.key === 'M') toggleMap();
+  if (e.key === 'Escape') toggleMap(false);
+  if (e.key === 'Enter' && !$('btn-confirm').disabled) $('btn-confirm').click();
+  if (e.key === 'ArrowUp' || e.key === 'w') { e.preventDefault(); panoMove(true); }
+  if (e.key === 'ArrowDown' || e.key === 's') { e.preventDefault(); panoMove(false); }
+  if (e.key === '-' || e.key === '_') $('btn-zoomout').click();
+  if (e.key === '0') resetVista();
+});
+
+$('btn-home-pano').addEventListener('click', () => resetVista({ tornaAlPunto: true }));
+
+$('btn-fs').addEventListener('click', () => {
+  if (document.fullscreenElement) document.exitFullscreen();
+  else document.documentElement.requestFullscreen().catch(() => {});
+});
+
+// su touch la minimappa e' opaca finche' non la tocchi
+$('guessbox').addEventListener('touchstart', () => $('guessbox').classList.add('touched'), { passive: true });
+
+/* ------------------------------------------------ app sulla schermata home */
+
+// Il service worker serve anche solo a rendere il gioco installabile.
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('sw.js').catch(() => { /* pazienza */ });
+  });
+}
+
+// Android e desktop: il browser ci avvisa quando l'installazione e` possibile,
+// e va offerta con un gesto nostro.
+window.addEventListener('beforeinstallprompt', (e) => {
+  e.preventDefault();
+  S.invitoInstalla = e;
+  $('btn-installa').hidden = false;
+});
+window.addEventListener('appinstalled', () => { $('btn-installa').hidden = true; });
+
+$('btn-installa').addEventListener('click', async () => {
+  const p = S.invitoInstalla;
+  if (!p) return;
+  $('btn-installa').hidden = true;
+  S.invitoInstalla = null;
+  try { await p.prompt(); } catch { /* rifiutato */ }
+});
+
+/* ---------------------------------------------------------------- avvio */
+
+(async function init() {
+  $('in-name').value = S.name;
+
+  try {
+    const cfg = await (await fetch('/api/config')).json();
+    S.lanUrls = Array.isArray(cfg.lanUrls) ? cfg.lanUrls : [];
+    if (cfg.gated) $('gate-wrap').hidden = false;
+    if (!cfg.hasToken) {
+      $('home-warn').hidden = false;
+      $('home-warn').textContent =
+        'Il server non ha ancora un token Mapillary: le partite non possono partire. ' +
+        'Metti MAPILLARY_TOKEN nel file .env e riavvia.';
+    }
+  } catch { /* offline: pazienza */ }
+
+  const c = new URLSearchParams(location.search).get('c');
+  if (!c || !/^[A-Za-z0-9]{4}$/.test(c)) return;
+
+  const codice = c.toUpperCase();
+  els('.tab').forEach((x) => x.classList.remove('active'));
+  el('.tab[data-tab=entra]').classList.add('active');
+  els('.tabpanel').forEach((p) => p.classList.remove('active'));
+  $('tab-entra').classList.add('active');
+  $('in-code').value = codice;
+
+  // Se sappiamo gia` chi sei e in che stanza eri, si rientra da soli: e`
+  // quello che serve quando ricaricare la pagina e` l'unico modo per uscire da
+  // un guaio. Ricaricare non deve mai costare la partita.
+  if (S.name && S.playerId) {
+    try { S.gate = sessionStorage.getItem('gd_gate') || ''; } catch { S.gate = ''; }
+    S.code = codice;
+    S.rientroAutomatico = true;
+    $('loading-txt').textContent = 'Rientro nella partita…';
+    show('screen-loading');
+    connect(() => send({
+      type: 'join', code: codice, name: S.name, playerId: S.playerId, gate: S.gate,
+    }));
+    // se il server non risponde, si torna alla schermata iniziale
+    setTimeout(() => {
+      if (S.rientroAutomatico && !S.room) { S.rientroAutomatico = false; show('screen-home'); }
+    }, 6000);
+    return;
+  }
+
+  if (!S.name) $('in-name').focus();
+})();

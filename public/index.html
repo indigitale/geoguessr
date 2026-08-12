@@ -1,0 +1,254 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8" />
+<meta id="viewport" name="viewport"
+      content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+<title>GeoDuello</title>
+<meta name="theme-color" content="#0b0e13" />
+<link rel="manifest" href="manifest.webmanifest" />
+<link rel="apple-touch-icon" href="icone/icona-180.png" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="GeoDuello" />
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🌍</text></svg>" />
+
+<link href="vendor/mapillary/mapillary.css" rel="stylesheet" />
+<link href="vendor/leaflet/leaflet.css" rel="stylesheet" />
+<link href="style.css" rel="stylesheet" />
+</head>
+<body>
+
+<!-- ============================ HOME ============================ -->
+<section id="screen-home" class="screen active">
+  <div class="card">
+    <h1 class="logo">🌍 GeoDuello</h1>
+    <p class="sub">Indovina dove sei nel mondo. Vince chi si avvicina di piu&#768;.</p>
+
+    <label class="field">
+      <span>Il tuo nome</span>
+      <input id="in-name" type="text" maxlength="20" placeholder="Es. Papa&#768;" autocomplete="off" />
+    </label>
+
+    <label class="field" id="gate-wrap" hidden>
+      <span>Parola d&#39;ordine</span>
+      <input id="in-gate" type="password" placeholder="Richiesta dal server" autocomplete="off" />
+    </label>
+
+    <div class="tabs">
+      <button class="tab active" data-tab="crea">Crea partita</button>
+      <button class="tab" data-tab="entra">Entra</button>
+    </div>
+
+    <div id="tab-crea" class="tabpanel active">
+      <div class="opts">
+        <div class="opt">
+          <span>Zona</span>
+          <div class="chips" id="opt-scope">
+            <button class="chip active" data-v="mondo">Mondo</button>
+            <button class="chip" data-v="europa">Europa</button>
+            <button class="chip" data-v="italia">Italia</button>
+          </div>
+        </div>
+        <div class="opt">
+          <span>Round</span>
+          <div class="chips" id="opt-rounds">
+            <button class="chip" data-v="3">3</button>
+            <button class="chip active" data-v="5">5</button>
+            <button class="chip" data-v="7">7</button>
+            <button class="chip" data-v="10">10</button>
+          </div>
+        </div>
+        <div class="opt">
+          <span>Tempo per round</span>
+          <div class="chips" id="opt-timer">
+            <button class="chip" data-v="60">1 min</button>
+            <button class="chip active" data-v="120">2 min</button>
+            <button class="chip" data-v="180">3 min</button>
+            <button class="chip" data-v="300">5 min</button>
+            <button class="chip" data-v="0">Libero</button>
+          </div>
+        </div>
+      </div>
+      <button id="btn-create" class="primary big">Crea la stanza</button>
+    </div>
+
+    <div id="tab-entra" class="tabpanel">
+      <label class="field">
+        <span>Codice stanza</span>
+        <input id="in-code" type="text" maxlength="4" placeholder="ABCD" autocomplete="off"
+               autocapitalize="characters" class="code-input" />
+      </label>
+      <button id="btn-join" class="primary big">Entra nella stanza</button>
+    </div>
+
+    <p id="home-err" class="err" hidden></p>
+    <p id="home-warn" class="warn" hidden></p>
+  </div>
+</section>
+
+<!-- ============================ LOBBY ============================ -->
+<section id="screen-lobby" class="screen">
+  <div class="card">
+    <h2>Stanza</h2>
+    <div class="roomcode" id="lobby-code">----</div>
+    <p class="sub">Fai aprire questo link all&#39;altro giocatore:</p>
+    <div class="sharebox">
+      <input id="lobby-link" type="text" readonly />
+      <button id="btn-copy" class="ghost">Copia</button>
+    </div>
+    <div id="qrwrap" class="qrwrap" hidden>
+      <div id="lobby-qr"></div>
+      <p class="sub qrhint">Inquadralo con la fotocamera del telefono.</p>
+    </div>
+    <p id="lan-hint" class="warn" hidden></p>
+
+    <h3>Giocatori</h3>
+    <ul id="lobby-players" class="players"></ul>
+
+    <div class="opt" id="avatar-wrap">
+      <span>Il tuo simbolo</span>
+      <div class="chips avatar-chips" id="opt-avatar"></div>
+    </div>
+
+    <div id="lobby-albo" class="albo" hidden></div>
+
+    <div id="lobby-settings" class="opts" hidden>
+      <div class="opt">
+        <span>Zona</span>
+        <div class="chips" id="lob-scope">
+          <button class="chip" data-v="mondo">Mondo</button>
+          <button class="chip" data-v="europa">Europa</button>
+          <button class="chip" data-v="italia">Italia</button>
+        </div>
+      </div>
+      <div class="opt">
+        <span>Round</span>
+        <div class="chips" id="lob-rounds">
+          <button class="chip" data-v="3">3</button>
+          <button class="chip" data-v="5">5</button>
+          <button class="chip" data-v="7">7</button>
+          <button class="chip" data-v="10">10</button>
+        </div>
+      </div>
+      <div class="opt">
+        <span>Andamento</span>
+        <div class="chips" id="lob-crescendo">
+          <button class="chip" data-v="0">Zona fissa</button>
+          <button class="chip" data-v="1">In crescendo</button>
+        </div>
+      </div>
+      <div class="opt">
+        <span>Tempo per round</span>
+        <div class="chips" id="lob-timer">
+          <button class="chip" data-v="60">1 min</button>
+          <button class="chip" data-v="120">2 min</button>
+          <button class="chip" data-v="180">3 min</button>
+          <button class="chip" data-v="300">5 min</button>
+          <button class="chip" data-v="0">Libero</button>
+        </div>
+      </div>
+    </div>
+
+    <p id="lobby-info" class="sub"></p>
+    <button id="btn-installa" class="ghost small" hidden>📲 Aggiungi alla schermata home</button>
+    <button id="btn-sound2" class="ghost small">🔊 Suoni attivi</button>
+    <button id="btn-start" class="primary big" hidden>Inizia la partita</button>
+    <p id="lobby-err" class="err" hidden></p>
+    <button id="btn-leave" class="ghost small">Esci dalla stanza</button>
+  </div>
+</section>
+
+<!-- ============================ LOADING ============================ -->
+<section id="screen-loading" class="screen">
+  <div class="card center">
+    <div class="spinner"></div>
+    <h2 id="loading-txt">Cerco un posto&hellip;</h2>
+    <p class="sub">Sto pescando una via a caso dalla copertura Mapillary.</p>
+  </div>
+</section>
+
+<!-- ============================ GIOCO ============================ -->
+<section id="screen-play" class="screen full play">
+  <div id="pano"></div>
+  <div id="panoerr" class="panoerr" hidden></div>
+  <div id="countdown" class="countdown" hidden></div>
+
+  <div class="hud">
+    <div class="hud-pill" id="hud-round">Round 1/5</div>
+    <div class="hud-pill" id="hud-timer" hidden>2:00</div>
+    <div class="hud-pill hud-scope" id="hud-scope">Mondo</div>
+    <button class="hud-pill aiutino" id="btn-aiutino">&#128161; Aiutino</button>
+  </div>
+
+  <div class="hud-right">
+    <button id="btn-sound" class="iconbtn" title="Suoni">🔊</button>
+    <button id="btn-home-pano" class="iconbtn" title="Torna al punto di partenza e azzera lo zoom">⌂</button>
+    <button id="btn-fs" class="iconbtn" title="Schermo intero">⛶</button>
+  </div>
+
+  <div class="navpad">
+    <button id="btn-fwd" class="navbtn" title="Avanti lungo la strada (freccia su)">↑</button>
+    <span class="navlabel">muoviti</span>
+    <button id="btn-back" class="navbtn" title="Indietro lungo la strada (freccia giu&#768;)">↓</button>
+    <button id="btn-zoomout" class="navbtn small" title="Allontana la visuale (tasto -)">−</button>
+    <span class="navlabel">zoom</span>
+  </div>
+
+  <div id="guessbox" class="guessbox">
+    <div id="minimap"></div>
+    <div class="guessbar">
+      <button id="btn-mapsize" class="ghost small">Ingrandisci</button>
+      <button id="btn-confirm" class="primary" disabled>Metti il segnalino</button>
+    </div>
+  </div>
+
+  <div id="waiting" class="waiting" hidden>
+    <div class="spinner small"></div>
+    <span id="waiting-txt">In attesa dell&#39;altro giocatore&hellip;</span>
+    <button id="btn-force" class="forcebtn" hidden>Chiudi il round</button>
+  </div>
+</section>
+
+<!-- ============================ RISULTATO ============================ -->
+<section id="screen-reveal" class="screen full">
+  <div class="reveal-wrap">
+    <div id="revealmap"></div>
+    <div class="reveal-panel">
+      <h2 id="reveal-title">Round 1</h2>
+      <p class="sub" id="reveal-place"></p>
+      <ul id="reveal-list" class="results"></ul>
+      <button id="btn-next" class="primary big" hidden>Prossimo round</button>
+      <p id="reveal-info" class="sub"></p>
+    </div>
+  </div>
+</section>
+
+<!-- ============================ FINALE ============================ -->
+<section id="screen-final" class="screen full">
+  <div class="reveal-wrap">
+    <div id="finalmap"></div>
+    <div class="reveal-panel">
+      <h1 id="final-title">Fine partita</h1>
+      <ul id="final-list" class="standings"></ul>
+      <div id="final-novita" class="novita" hidden></div>
+      <div id="final-albo" class="albo" hidden></div>
+      <button id="btn-again" class="primary big" hidden>Nuova partita</button>
+      <p id="final-info" class="sub"></p>
+      <button id="btn-leave2" class="ghost small">Esci</button>
+    </div>
+  </div>
+</section>
+
+<div id="flash" class="flash" hidden></div>
+<button id="btn-sblocca" class="sblocca" hidden>Rimetti a posto lo schermo</button>
+<div id="toast" class="toast" hidden></div>
+
+<script src="suoni.js"></script>
+<script src="vendor/qrcode/qrcode.js"></script>
+<script src="vendor/mapillary/mapillary.js"></script>
+<script src="vendor/leaflet/leaflet.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

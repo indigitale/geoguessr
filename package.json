@@ -1,0 +1,24 @@
+{
+  "name": "geoduello",
+  "version": "1.0.0",
+  "description": "Gioco tipo GeoGuessr multiplayer senza registrazione, immagini Mapillary",
+  "type": "module",
+  "main": "server/index.js",
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "node --watch server/index.js",
+    "demo": "FAKE_LOCATIONS=1 node server/index.js",
+    "test": "node scripts/selftest.js",
+    "test:ui": "node scripts/uitest.js",
+    "check": "node scripts/check-mapillary.js",
+    "albo": "node scripts/albo-backup.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@mapbox/vector-tile": "^3.0.0",
+    "pbf": "^5.1.2",
+    "ws": "^8.18.0"
+  }
+}

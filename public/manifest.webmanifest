@@ -1,0 +1,17 @@
+{
+  "name": "GeoDuello",
+  "short_name": "GeoDuello",
+  "description": "Indovina dove sei nel mondo. Vince chi si avvicina di più.",
+  "lang": "it",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#0b0e13",
+  "theme_color": "#0b0e13",
+  "icons": [
+    { "src": "icone/icona-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icone/icona-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "icone/icona-mascherabile.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>GeoDuello — diagnostica</title>
+<link href="style.css" rel="stylesheet" />
+<style>
+  body { padding: 20px 14px 60px; }
+  .card { margin: 0 auto; }
+  .prova {
+    display: flex;
+    gap: 12px;
+    align-items: flex-start;
+    padding: 13px 14px;
+    background: var(--panel-2);
+    border: 1px solid var(--line);
+    border-left-width: 4px;
+    border-radius: 10px;
+    margin-bottom: 9px;
+  }
+  .prova.ok { border-left-color: var(--accent); }
+  .prova.ko { border-left-color: var(--err); }
+  .prova.attesa { border-left-color: var(--dim); }
+  .segno { font-size: 20px; line-height: 1.2; width: 24px; flex: none; text-align: center; }
+  .prova b { display: block; font-size: 15px; margin-bottom: 2px; }
+  .prova span { font-size: 13px; color: var(--dim); word-break: break-word; }
+  #esito { font-size: 15px; line-height: 1.55; margin-top: 18px; }
+  #anteprima { width: 100%; border-radius: 10px; margin-top: 10px; display: none; }
+</style>
+</head>
+<body>
+<div class="card">
+  <h1>Diagnostica</h1>
+  <p class="sub">Apri questa pagina sul telefono che vede tutto nero. Quando ha finito, manda una foto dello schermo.</p>
+
+  <div id="prove"></div>
+  <img id="anteprima" alt="" />
+  <p id="esito" class="sub"></p>
+  <button class="primary big" onclick="location.reload()">Riprova</button>
+  <button class="ghost small" onclick="location.href='/'">Torna al gioco</button>
+</div>
+
+<script>
+const prove = document.getElementById('prove');
+function riga(nome) {
+  const d = document.createElement('div');
+  d.className = 'prova attesa';
+  d.innerHTML = '<div class="segno">…</div><div><b>' + nome + '</b><span>controllo in corso</span></div>';
+  prove.appendChild(d);
+  return {
+    ok: (t) => { d.className = 'prova ok'; d.querySelector('.segno').textContent = '✓';
+                 d.querySelector('span').textContent = t; },
+    ko: (t) => { d.className = 'prova ko'; d.querySelector('.segno').textContent = '✕';
+                 d.querySelector('span').textContent = t; },
+  };
+}
+
+const esiti = {};
+
+// 1. WebGL: senza, MapillaryJS non puo' disegnare niente.
+(function () {
+  const r = riga('Grafica 3D del telefono');
+  try {
+    const c = document.createElement('canvas');
+    const gl = c.getContext('webgl2') || c.getContext('webgl');
+    if (!gl) { esiti.webgl = false; return r.ko('WebGL non disponibile: il panorama non puo` funzionare su questo browser'); }
+    const dbg = gl.getExtension('WEBGL_debug_renderer_info');
+    esiti.webgl = true;
+    r.ok(dbg ? String(gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL)).slice(0, 60) : 'disponibile');
+  } catch (e) { esiti.webgl = false; r.ko('errore: ' + e.message); }
+})();
+
+// 2. La libreria del visore arriva dal server del gioco.
+(async function () {
+  const r = riga('Libreria del visore');
+  try {
+    const res = await fetch('vendor/mapillary/mapillary.js', { method: 'HEAD' });
+    esiti.lib = res.ok;
+    res.ok ? r.ok('scaricata dal Mac') : r.ko('HTTP ' + res.status);
+  } catch (e) { esiti.lib = false; r.ko(e.message); }
+})();
+
+// Nessun controllo deve poter restare appeso: senza verdetto la pagina non
+// serve a niente. Ogni prova ha la sua scadenza.
+function conScadenza(p, ms, messaggio) {
+  return Promise.race([
+    p,
+    new Promise((_, no) => setTimeout(() => no(new Error(messaggio)), ms)),
+  ]);
+}
+
+// 3. I dati delle immagini: graph.mapillary.com deve essere raggiungibile.
+//    Anche una risposta di errore va bene: significa che il telefono ci arriva.
+(async function () {
+  const r = riga('Collegamento a Mapillary');
+  try {
+    await conScadenza(
+      fetch('https://graph.mapillary.com/', { mode: 'no-cors' }),
+      8000, 'nessuna risposta entro 8 secondi'
+    );
+    esiti.graph = true;
+    r.ok('raggiungibile');
+  } catch (e) {
+    esiti.graph = false;
+    r.ko('IRRAGGIUNGIBILE (' + e.message + ') — di solito e` un filtro della rete o del telefono');
+  } finally { fine(); }
+})();
+
+// 4. Le foto vere stanno sui server di Facebook (Mapillary e` di Meta):
+//    e' il pezzo che i filtri famiglia bloccano piu` spesso.
+(async function () {
+  const r = riga('Download di una foto vera');
+  let dati;
+  try {
+    dati = await (await fetch('/api/diag')).json();
+  } catch (e) { esiti.foto = false; return r.ko('il server del gioco non risponde: ' + e.message); }
+  if (!dati.ok || !dati.thumbUrl) {
+    esiti.foto = false;
+    return r.ko('il Mac non e` riuscito a preparare la prova: ' + (dati.error || 'nessun indirizzo'));
+  }
+  const host = (dati.thumbUrl.match(/^https?:\/\/([^/]+)/) || [])[1] || '?';
+  const img = document.getElementById('anteprima');
+  const t0 = Date.now();
+  const scadenza = setTimeout(() => {
+    if (esiti.foto === undefined) {
+      esiti.foto = false;
+      r.ko('nessuna risposta da ' + host + ' entro 15 secondi: sembra bloccata');
+      fine();
+    }
+  }, 15000);
+  img.onload = () => {
+    clearTimeout(scadenza);
+    esiti.foto = true;
+    img.style.display = 'block';
+    r.ok('scaricata da ' + host + ' in ' + (Date.now() - t0) + ' ms — ' + dati.luogo);
+    fine();
+  };
+  img.onerror = () => {
+    clearTimeout(scadenza);
+    esiti.foto = false;
+    r.ko('BLOCCATA: il telefono non scarica da ' + host);
+    fine();
+  };
+  img.src = dati.thumbUrl;
+})();
+
+// 5. Il collegamento in tempo reale col gioco.
+(function () {
+  const r = riga('Collegamento al gioco');
+  try {
+    const ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws');
+    const t = setTimeout(() => { esiti.ws = false; r.ko('nessuna risposta'); ws.close(); }, 6000);
+    ws.onopen = () => { clearTimeout(t); esiti.ws = true; r.ok('attivo'); ws.close(); };
+    ws.onerror = () => { clearTimeout(t); esiti.ws = false; r.ko('non riesce a collegarsi'); };
+  } catch (e) { esiti.ws = false; r.ko(e.message); }
+})();
+
+function fine() {
+  const e = document.getElementById('esito');
+  if (esiti.webgl === undefined || esiti.foto === undefined || esiti.graph === undefined) {
+    e.textContent = 'Controlli ancora in corso…';
+    return;
+  }
+  if (esiti.webgl === false) {
+    e.innerHTML = '<b>Causa trovata:</b> questo browser non sa disegnare la grafica 3D. ' +
+      'Prova con un altro browser, oppure disattiva eventuali risparmi energetici o modalita` a basso consumo.';
+  } else if (esiti.foto === false && esiti.graph === false) {
+    e.innerHTML = '<b>Causa trovata:</b> questo telefono non raggiunge i server di Mapillary. ' +
+      'Quasi sempre e` un filtro: parental control, Tempo di utilizzo, un DNS di famiglia sul router, ' +
+      'oppure una VPN attiva. I domini da sbloccare sono <b>mapillary.com</b> e <b>fbcdn.net</b>.';
+  } else if (esiti.foto === false) {
+    e.innerHTML = '<b>Causa trovata:</b> i dati arrivano ma le foto no. Le immagini di Mapillary stanno ' +
+      'sui server di Meta (<b>fbcdn.net</b>): se un filtro blocca i domini Facebook, resta tutto nero. ' +
+      'Va sbloccato quel dominio.';
+  } else if (esiti.webgl && esiti.foto) {
+    e.innerHTML = '<b>Qui va tutto.</b> Se il panorama resta nero lo stesso, il problema e` altrove: ' +
+      'mandami una foto di questa pagina.';
+  }
+}
+setInterval(fine, 1500);
+</script>
+</body>
+</html>

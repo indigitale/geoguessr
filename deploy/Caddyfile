@@ -1,0 +1,13 @@
+# GeoDuello dietro Caddy. Caddy gestisce da solo HTTPS e WebSocket: non serve
+# nessuna configurazione aggiuntiva per il canale in tempo reale.
+#
+# Sostituire dominio e IP del container.
+
+geoduello.tuodominio.it {
+    reverse_proxy 192.168.1.50:3000 {
+        # la partita puo' restare ferma fra un round e l'altro
+        transport http {
+            read_timeout 1h
+        }
+    }
+}

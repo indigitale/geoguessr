@@ -1,0 +1,19 @@
+# Deploy su Render: New > Blueprint, e punta a questo repository.
+# MAPILLARY_TOKEN e GATE_CODE non stanno qui dentro: sync=false significa
+# "chiedimeli nel pannello", cosi' non finiscono mai nel repository.
+services:
+  - type: web
+    name: geoduello
+    runtime: docker
+    plan: free
+    region: frankfurt # il piu' vicino all'Italia
+    healthCheckPath: /health
+    envVars:
+      - key: MAPILLARY_TOKEN
+        sync: false
+      - key: GATE_CODE
+        sync: false
+      # Il disco del piano gratuito si azzera a ogni riavvio: meglio non tenere
+      # un campionato che sparirebbe. Quello vero resta sul Mac di casa.
+      - key: ALBO_OFF
+        value: "1"
