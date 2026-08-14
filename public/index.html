@@ -16,7 +16,9 @@
 
 <link href="vendor/mapillary/mapillary.css" rel="stylesheet" />
 <link href="vendor/leaflet/leaflet.css" rel="stylesheet" />
-<link href="style.css" rel="stylesheet" />
+<!-- ?v= e' l'impronta della versione, iniettata dal server: quando il codice
+     cambia, cambia l'indirizzo, e nessuna cache puo' servire quello vecchio -->
+<link href="style.css?v={{V}}" rel="stylesheet" />
 </head>
 <body>
 
@@ -344,10 +346,10 @@
 <button id="btn-sblocca" class="sblocca" hidden>Rimetti a posto lo schermo</button>
 <div id="toast" class="toast" hidden></div>
 
-<script src="suoni.js"></script>
+<script src="suoni.js?v={{V}}"></script>
 <script src="vendor/qrcode/qrcode.js"></script>
 <script src="vendor/mapillary/mapillary.js"></script>
 <script src="vendor/leaflet/leaflet.js"></script>
-<script src="app.js"></script>
+<script src="app.js?v={{V}}"></script>
 </body>
 </html>

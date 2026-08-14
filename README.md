@@ -199,11 +199,14 @@ grafica 3D. Si perde il camminare, ma il round si gioca. Se non parte nemmeno
 quella, compare un riquadro con gli errori veri del browser e un pulsante per
 copiarli.
 
-**Ho aggiornato ma vedo ancora la versione vecchia.** In fondo al pannello
-"Come si gioca" c'è l'impronta della versione servita: se dopo un aggiornamento
-è cambiata, il server è a posto e il problema era la pagina aperta da prima; se
-è rimasta identica, l'aggiornamento non è arrivato al server. Il codice del
-gioco si rivalida a ogni caricamento, quindi basta ricaricare la pagina.
+**Ho aggiornato ma vedo ancora la versione vecchia.** Non dovrebbe più
+succedere: ogni versione del codice ha un indirizzo diverso
+(`app.js?v=impronta`), che nessuna cache — browser, telefono o proxy — può
+avere già visto; e se una pagina rimasta aperta si accorge di eseguire una
+versione diversa da quella servita, si ricarica da sola. Per controllare: in
+fondo al pannello "Come si gioca" c'è l'impronta della versione. Se dopo un
+aggiornamento non cambia nemmeno ricaricando, l'aggiornamento non è arrivato al
+server: nel container, `cd /opt/geoduello && git log --oneline -1`.
 
 **Diagnostica.** Sul dispositivo che fa i capricci apri
 `http://INDIRIZZO:3000/diagnostica.html`: in dieci secondi prova la grafica 3D,

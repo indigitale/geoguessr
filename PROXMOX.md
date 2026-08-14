@@ -177,6 +177,13 @@ Proxy Host verso `192.168.1.50` porta `3000`, e **attiva l'interruttore
 "Websockets Support"**. È quello il passaggio che salta a tutti. Nella scheda
 Advanced puoi aggiungere `proxy_read_timeout 3600s;`.
 
+E **spegni "Cache Assets"** se è acceso: fa trattenere al proxy i file
+JavaScript per giorni, e dopo un aggiornamento i telefoni si ritrovano la
+grafica nuova con il codice vecchio — pulsanti disegnati che non rispondono.
+Il gioco ormai si difende da solo (ogni versione ha un indirizzo diverso, che
+nessuna cache può aver già visto), ma quell'interruttore resta inutile qui: i
+file del gioco dichiarano già da soli per quanto farsi tenere in cache.
+
 ## 5. Prima di aprirlo al mondo
 
 Se il dominio è raggiungibile da internet, **metti `GATE_CODE`** nel `.env`.

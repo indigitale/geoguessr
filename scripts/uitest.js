@@ -204,6 +204,19 @@ async function main() {
     });
     ok(rispMan === 'standalone', 'il manifest chiede la modalita` a tutto schermo');
 
+    // Versioni coerenti: il codice caricato deve essere ESATTAMENTE quello che
+    // il server sta servendo. Su un telefono vero e` successo il contrario —
+    // HTML nuovo con JavaScript vecchio dalla cache: pulsanti disegnati ma
+    // sordi, e il movimento col bug gia` corretto.
+    const verCfg = await A.evaluate(async () => (await (await fetch('/api/config')).json()).versione);
+    const verScript = await A.evaluate(() =>
+      new URL(document.querySelector('script[src*="app.js"]').src).searchParams.get('v'));
+    ok(!!verScript && verScript === verCfg,
+      `la pagina carica il codice con l’impronta della versione del server (${verScript})`);
+    const htmlServito = await A.evaluate(async () => await (await fetch('/', { cache: 'no-store' })).text());
+    ok(!htmlServito.includes('{{V}}') && htmlServito.includes(`app.js?v=${verCfg}`),
+      'il server inietta l`impronta in ogni riferimento della pagina');
+
     // andamento in crescendo
     ok(await A.locator('#lob-crescendo .chip').count() === 2, 'si sceglie fra zona fissa e crescendo');
 
@@ -266,6 +279,17 @@ async function main() {
     const destraB = await B.locator('.hud-right').boundingBox();
     ok(hudB && destraB && hudB.x + hudB.width <= destraB.x + 1,
       'sul telefono la riga dei dati non si sovrappone ai pulsanti');
+    // ...nemmeno con il timer acceso e largo: su un telefono vero "1:46"
+    // era finito sopra il "?".
+    await B.evaluate(() => {
+      const t = document.getElementById('hud-timer');
+      t.hidden = false; t.textContent = '19:46';
+    });
+    const hudB2 = await B.locator('.hud').boundingBox();
+    const destraB2 = await B.locator('.hud-right').boundingBox();
+    ok(hudB2 && destraB2 && hudB2.x + hudB2.width <= destraB2.x + 1,
+      'anche col timer acceso, sul telefono, niente si sovrappone');
+    await B.evaluate(() => { document.getElementById('hud-timer').hidden = true; });
     await A.click('#btn-aiutino');
     ok((await A.textContent('#btn-aiutino')).includes('Sicuro'),
       'il primo tocco avverte del costo invece di spendere subito');

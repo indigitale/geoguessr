@@ -8,7 +8,10 @@
  * obbligata per un gioco che aggiorniamo di continuo — con la cache in
  * testa vi ritrovereste una versione vecchia senza capire perche'.
  */
-const CACHE = 'geoduello-v1';
+// Alzare il numero butta via TUTTA la cache vecchia alla prossima visita:
+// e' la leva da tirare quando un aggiornamento importante non deve convivere
+// con nessun residuo del passato.
+const CACHE = 'geoduello-v2';
 
 // Solo roba che non cambia mai: le librerie di terze parti e le icone.
 const STABILI = /\/vendor\/|\/icone\//;

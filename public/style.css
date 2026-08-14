@@ -275,9 +275,12 @@ button.ghost.small { width: 100%; margin-top: 14px; font-size: 13px; color: var(
   gap: 8px;
   z-index: 20;
   flex-wrap: wrap;
-  /* lascia sempre spazio ai pulsanti in alto a destra: senza, la pillola
-     dell'aiutino ci finisce sotto e non si riesce a premerla */
-  max-width: calc(100% - 190px);
+  /* lascia sempre spazio ai pulsanti in alto a destra: senza, le pillole ci
+     finiscono sotto e non si riesce a premerle. Il conto va rifatto ogni
+     volta che si aggiunge un pulsante: 12px di margine sinistro + quattro
+     pulsanti da 38px con tre spazi da 8px + 12px a destra + 8px d'aria.
+     (E` gia` successo: aggiunto il "?", il timer ci e` finito sopra.) */
+  max-width: calc(100% - 220px);
 }
 .hud-right {
   position: absolute;
@@ -440,6 +443,10 @@ a.vaia:hover { text-decoration: underline; }
   color: var(--dim);
   text-shadow: 0 1px 3px rgba(0,0,0,.9);
 }
+
+/* Le regole per gli schermi stretti stanno TUTTE nel blocco "mobile" in
+   fondo al file: due blocchi che ritoccano gli stessi elementi finiscono per
+   contraddirsi in silenzio, e vince quello scritto piu' in basso. */
 
 /* Conto alla rovescia degli ultimi secondi: grande, al centro, impossibile
    non vederlo anche mentre si guarda il panorama. */
@@ -914,16 +921,35 @@ a.vaia:hover { text-decoration: underline; }
   /* Su schermo stretto la riga dei dati finiva sotto i pulsanti in alto a
      destra: la zona si legge gia` in lobby, qui si puo` togliere. */
   .hud-scope { display: none; }
-  .hud { max-width: calc(100% - 140px); }
-  .hud-pill { padding: 7px 11px; font-size: 13px; }
+  /* Lo spazio riservato ai pulsanti di destra va RIFATTO ogni volta che se ne
+     aggiunge uno: 12px di margine + quattro da 34px con tre spazi da 8px +
+     12px a destra + 8px d'aria = 192. Era rimasto a 140, tarato su tre
+     pulsanti, e su un telefono vero il timer copriva il "?". */
+  .hud { max-width: calc(100% - 192px); }
+  .hud-pill { padding: 6px 10px; font-size: 12.5px; }
   .iconbtn { width: 34px; height: 34px; font-size: 15px; }
 
   /* L'avviso a scomparsa stava sopra i pulsanti della mappa. */
   .toast { bottom: auto; top: 30%; max-width: calc(100vw - 40px); }
   .roomcode { font-size: 44px; }
 
-  .guessbox { left: 12px; right: 12px; width: auto; opacity: 1; }
-  #minimap { height: 150px; }
+  /* La mappa resta larga (per mirare col pollice serve spazio) ma bassa e
+     discreta: al primo tocco si accende, con "Ingrandisci" riempie lo
+     schermo. Prima era alta e sempre opaca: copriva mezzo panorama. */
+  .guessbox { left: 12px; right: 12px; width: auto; opacity: .6; }
+  #minimap { height: 134px; }
+
+  /* I comandi di movimento si ancorano SOPRA la mappa invece che a meta'
+     schermo: a meta' schermo, con la barra dei browser mobili che ruba
+     altezza, la freccia in giu' finiva mezza nascosta sotto la mappa. */
+  .navbtn { width: 52px; height: 52px; font-size: 24px; }
+  .navbtn.small { width: 42px; height: 42px; font-size: 20px; }
+  .navpad {
+    top: auto;
+    transform: none;
+    /* 134 di mappa + 16 di cornice + ~54 di barra + 12 dal fondo + 12 d'aria */
+    bottom: calc(max(12px, env(safe-area-inset-bottom)) + 228px);
+  }
 
   /* Sul telefono "Ingrandisci" apre la mappa quasi a tutto schermo: su un
      riquadro da 150px non si azzecca niente. */
@@ -944,4 +970,13 @@ a.vaia:hover { text-decoration: underline; }
     border-top: 1px solid var(--line);
     padding: 18px;
   }
+}
+
+/* Telefono in ORIZZONTALE: di altezza ce n'e' poca, di larghezza tanta.
+   La mappa torna un riquadro compatto a destra e i comandi tornano a meta'
+   del bordo sinistro, dove non danno fastidio a nessuno. */
+@media (max-height: 450px) {
+  .navpad { top: 50%; bottom: auto; transform: translateY(-50%); }
+  .guessbox { left: auto; right: 12px; width: 240px; opacity: .6; }
+  #minimap { height: 110px; }
 }

@@ -1559,6 +1559,22 @@ $('btn-installa').addEventListener('click', async () => {
     // L'impronta della versione servita: se dopo un aggiornamento resta
     // quella di prima, il problema e` la cache del browser, non il server.
     if (cfg.versione) $('help-versione').textContent = `versione ${cfg.versione}`;
+
+    // Auto-guarigione: se questo script NON e` la versione che il server sta
+    // servendo, qualche cache ha trattenuto il codice vecchio — grafica nuova
+    // con logica vecchia, pulsanti disegnati ma sordi. Un ricaricamento
+    // risolve (la pagina fresca punta agli indirizzi nuovi); il segnalibro in
+    // sessionStorage evita di girare in tondo se il guaio persiste.
+    try {
+      const mia = new URL(document.querySelector('script[src*="app.js"]').src, location.href)
+        .searchParams.get('v');
+      if (cfg.versione && mia && mia !== cfg.versione
+          && sessionStorage.getItem('gd_ricarica') !== cfg.versione) {
+        sessionStorage.setItem('gd_ricarica', cfg.versione);
+        location.reload();
+        return;
+      }
+    } catch { /* niente confronto possibile: si va avanti */ }
     if (cfg.gated) $('gate-wrap').hidden = false;
     if (!cfg.hasToken) {
       $('home-warn').hidden = false;

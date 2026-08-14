@@ -129,6 +129,32 @@ function politicaCache(rel) {
   return 'no-cache';
 }
 
+/**
+ * L'unica difesa che funziona contro OGNI cache — browser, proxy, service
+ * worker — e' cambiare l'indirizzo: la pagina principale chiede
+ * "app.js?v=IMPRONTA", e quando il codice cambia, cambia anche l'indirizzo.
+ * Una cache non puo' servire una risposta vecchia per un indirizzo che non
+ * ha mai visto. E' successo davvero: dopo un aggiornamento un telefono ha
+ * eseguito per ore il JavaScript vecchio sopra l'HTML nuovo, con i pulsanti
+ * nuovi disegnati ma sordi.
+ */
+function iniettaVersione(html) {
+  return html.toString('utf8').replaceAll('{{V}}', VERSIONE);
+}
+
+function rispondi(req, res, buf, type, rel) {
+  const etag = '"' + crypto.createHash('sha1').update(buf).digest('hex').slice(0, 16) + '"';
+  if (req.headers['if-none-match'] === etag) {
+    res.writeHead(304, { etag, 'cache-control': politicaCache(rel) }).end();
+    return;
+  }
+  res.writeHead(200, {
+    'content-type': type,
+    etag,
+    'cache-control': politicaCache(rel),
+  }).end(buf);
+}
+
 function serveStatic(req, res) {
   const url = new URL(req.url, 'http://localhost');
   let rel = decodeURIComponent(url.pathname);
@@ -144,21 +170,13 @@ function serveStatic(req, res) {
       // SPA: qualsiasi rotta sconosciuta torna la pagina principale
       fs.readFile(path.join(PUBLIC_DIR, 'index.html'), (e2, html) => {
         if (e2) return res.writeHead(404).end('Not found');
-        res.writeHead(200, { 'content-type': MIME['.html'] }).end(html);
+        rispondi(req, res, iniettaVersione(html), MIME['.html'], '/index.html');
       });
       return;
     }
     const type = MIME[path.extname(filePath).toLowerCase()] || 'application/octet-stream';
-    const etag = '"' + crypto.createHash('sha1').update(buf).digest('hex').slice(0, 16) + '"';
-    if (req.headers['if-none-match'] === etag) {
-      res.writeHead(304, { etag, 'cache-control': politicaCache(rel) }).end();
-      return;
-    }
-    res.writeHead(200, {
-      'content-type': type,
-      etag,
-      'cache-control': politicaCache(rel),
-    }).end(buf);
+    const corpo = rel === '/index.html' ? iniettaVersione(buf) : buf;
+    rispondi(req, res, corpo, type, rel);
   });
 }
 
