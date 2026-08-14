@@ -7,6 +7,10 @@ import fs from 'node:fs';
 
 const PORT = 3998;
 const APP_URL = `http://127.0.0.1:${PORT}/`;
+// Un secondo server, con la parola d'ordine accesa: serve solo alla prova
+// dell'invito che se la porta dietro.
+const PORT_GATE = 3999;
+const PAROLA = 'sesamo-2026';
 // albo usa e getta: il test non deve sporcare quello vero
 const ALBO_TMP = `/tmp/geoduello-test-albo-${process.pid}.json`;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -17,6 +21,70 @@ const ok = (c, l) => { console.log(`${c ? '  PASS' : '  FAIL'}  ${l}`); if (!c) 
 // Errori attesi e innocui in questo test: il visore Mapillary con token
 // vuoto e immagini finte, e le tile della mappa se la rete e' limitata.
 const IGNORE = /mapillary|graph\.mapillary|basemaps\.cartocdn|ERR_(NAME|INTERNET|CONNECTION|BLOCKED)|Failed to load resource|WebGL|tile/i;
+
+/**
+ * Server a parte con la parola d'ordine accesa. Non si puo' riusare quello
+ * principale: GATE_CODE si legge all'avvio.
+ */
+async function provaParolaNelLink(mk) {
+  const srv = spawn(process.execPath, ['server/index.js'], {
+    cwd: new URL('..', import.meta.url).pathname,
+    env: { ...process.env, PORT: String(PORT_GATE), FAKE_LOCATIONS: '1', MAPILLARY_TOKEN: '',
+           GATE_CODE: PAROLA, ALBO_OFF: '1' },
+    stdio: ['ignore', 'ignore', 'ignore'],
+  });
+  const base = `http://127.0.0.1:${PORT_GATE}`;
+  try {
+    for (let i = 0; i < 60; i++) {
+      try { if ((await fetch(`${base}/health`)).ok) break; } catch {}
+      await sleep(120);
+    }
+
+    const H = await mk('host-gate', { width: 1100, height: 800 });
+    await H.goto(`${base}/`, { waitUntil: 'domcontentloaded' });
+    await H.waitForSelector('#gate-wrap:not([hidden])', { timeout: 6000 });
+    ok(true, 'con la parola d`ordine accesa, il campo compare in home');
+    await H.fill('#in-name', 'Papa');
+    await H.fill('#in-gate', PAROLA);
+    await H.click('#btn-create');
+    await H.waitForSelector('#screen-lobby.active', { timeout: 8000 });
+    await H.waitForSelector('#help:not([hidden])', { timeout: 6000 });
+    await H.click('#btn-help-ok');
+
+    const invito = await H.inputValue('#lobby-link');
+    ok(invito.includes(`p=${encodeURIComponent(PAROLA)}`),
+      'il link d`invito si porta dietro la parola d`ordine');
+    ok(await H.isVisible('#link-nota'), 'e la lobby avverte che il link la contiene');
+    const codeG = (await H.textContent('#lobby-code')).trim();
+
+    // l'ospite apre il link e non tocca il campo della parola
+    const G = await mk('ospite-gate', { width: 390, height: 844 });
+    await G.goto(invito.replace(/^https?:\/\/[^/]+/, base), { waitUntil: 'domcontentloaded' });
+    // la ripulitura dell'indirizzo avviene appena la pagina si e' avviata
+    let pulita = true;
+    try {
+      await G.waitForFunction(() => !location.search.includes('p='), null, { timeout: 6000 });
+    } catch { pulita = false; }
+    ok(pulita, 'aperto il link, la parola sparisce dalla barra degli indirizzi');
+    ok((await G.inputValue('#in-gate')) === PAROLA, 'ma resta compilata nel campo');
+    await G.fill('#in-name', 'Figlio');
+    await G.click('#btn-join');
+    await G.waitForSelector('#screen-lobby.active', { timeout: 8000 });
+    ok((await G.textContent('#lobby-code')).trim() === codeG,
+      'entra nella stanza senza aver digitato la parola d`ordine');
+
+    // e chi arriva senza link resta comunque fuori
+    const X = await mk('estraneo-gate', { width: 900, height: 700 });
+    await X.goto(`${base}/?c=${codeG}`, { waitUntil: 'domcontentloaded' });
+    await X.fill('#in-name', 'Tizio');
+    await X.click('#btn-join');
+    await X.waitForSelector('#home-err:not([hidden])', { timeout: 8000 });
+    ok(/parola|ordine/i.test(await X.textContent('#home-err')),
+      'senza parola d`ordine si resta fuori: il link non e` un buco');
+  } finally {
+    srv.kill();
+  }
+}
 
 async function main() {
   const srv = spawn(process.execPath, ['server/index.js'], {
@@ -68,14 +136,40 @@ async function main() {
     ok(!link.includes('127.0.0.1'), 'il link d`invito usa l`indirizzo di rete, non localhost');
     const linkLocale = link.replace(/^https?:\/\/[^/]+/, APP_URL.replace(/\/$/, ''));
 
+    // ------------------------------------------------------ help in linea
+    // Alla prima partita le regole si presentano da sole, e succede in lobby:
+    // mai durante un round, dove costerebbe secondi di gioco.
+    await A.waitForSelector('#help:not([hidden])', { timeout: 6000 });
+    ok(true, 'alla prima partita le regole si aprono da sole, in lobby');
+    ok(await A.isVisible('#help-benvenuto'), 'e si presentano con una riga di benvenuto');
+    ok(await A.isHidden('#help-nota'), 'fuori dal round non parla di tempo che scorre');
+    const testoHelp = await A.textContent('#help');
+    for (const parola of ['dove stai guardando', 'Aiutino'.toLowerCase(), '30%', 'trenta secondi', 'ricarica']) {
+      ok(testoHelp.toLowerCase().includes(parola.toLowerCase()), `l’help spiega "${parola}"`);
+    }
+    await A.click('#btn-help-ok');
+    ok(await A.isHidden('#help'), 'si chiude con il pulsante');
+
     // --------------------------------------- il secondo entra dal link
     await B.goto(linkLocale, { waitUntil: 'domcontentloaded' });
     ok((await B.inputValue('#in-code')) === code, 'aprendo il link il codice e` gia` compilato');
     await B.fill('#in-name', 'Figlio');
     await B.click('#btn-join');
     await B.waitForSelector('#screen-lobby.active', { timeout: 8000 });
+    await B.waitForSelector('#help:not([hidden])', { timeout: 6000 });
+    await B.click('#btn-help-close');
+    ok(await B.isHidden('#help'), 'anche chi entra dal link riceve le regole, e le chiude con la ×');
     await A.waitForFunction(() => document.querySelectorAll('#lobby-players li').length === 2, null, { timeout: 8000 });
     ok(true, 'il secondo giocatore compare nella lista');
+
+    // seconda volta: nessuno se lo ritrova piu` davanti da solo
+    ok(await A.evaluate(() => localStorage.getItem('gd_help_visto') === '1'),
+      'il gioco ricorda che le regole sono gia` state viste');
+    await A.click('#screen-lobby .apri-help');
+    await A.waitForSelector('#help:not([hidden])', { timeout: 4000 });
+    ok(await A.isHidden('#help-benvenuto'), 'riaprendolo a mano non ripete il benvenuto');
+    await A.keyboard.press('Escape');
+    ok(await A.isHidden('#help'), 'Esc lo chiude');
 
     // avatar: ognuno sceglie il suo, e gli altri non possono prenderlo
     ok(await A.locator('#opt-avatar .chip').count() >= 6, 'in lobby si sceglie il proprio simbolo');
@@ -123,6 +217,32 @@ async function main() {
     ok(await A.isDisabled('#btn-confirm'), 'non si puo` confermare senza segnalino');
     ok(await A.isVisible('#btn-fwd') && await A.isVisible('#btn-back'),
       'i comandi avanti/indietro sono in pagina');
+
+    // help durante il round: si raggiunge senza uscire dalla partita, e i tasti
+    // di gioco non devono rispondere mentre si sta leggendo.
+    await A.keyboard.press('?');
+    await A.waitForSelector('#help:not([hidden])', { timeout: 4000 });
+    ok(true, 'durante il round le regole si riaprono col tasto ?');
+    ok(await A.isHidden('#help-nota'), 'senza limite di tempo non avvisa di nessun cronometro');
+    const mosseAperto = await A.evaluate(() => {
+      window.__help = 0;
+      const orig = window.panoMove;
+      window.panoMove = (...a) => { window.__help++; return orig(...a); };
+      return true;
+    });
+    await A.keyboard.press('ArrowUp');
+    ok(mosseAperto && (await A.evaluate(() => window.__help)) === 0,
+      'a pannello aperto le frecce non fanno camminare nessuno');
+    await A.click('#btn-help-close');
+    ok(await A.isHidden('#help'), 'e si torna al panorama dov`era');
+    // in un round a tempo, invece, va detto che leggere costa secondi
+    await A.evaluate(() => { S.deadline = Date.now() + 60000; });
+    await A.keyboard.press('?');
+    await A.waitForSelector('#help-nota:not([hidden])', { timeout: 4000 });
+    ok(true, 'in un round a tempo avvisa che il cronometro continua a correre');
+    await A.keyboard.press('Escape');
+    await A.evaluate(() => { S.deadline = null; });
+    ok(await A.isVisible('#btn-help'), 'il ? resta a portata di mano per tutta la partita');
 
     // aiutino: un tocco avverte del costo, il secondo conferma
     ok(await A.isVisible('#btn-aiutino'), 'il pulsante aiutino e` a portata di mano');
@@ -570,6 +690,11 @@ async function main() {
     await C.click('#btn-join');
     await C.waitForSelector('#home-err:not([hidden])', { timeout: 6000 });
     ok((await C.textContent('#home-err')).includes('inesistente'), 'codice sbagliato: errore mostrato in home');
+
+    // ------------------------------------------- invito con parola d'ordine
+    // Con GATE_CODE acceso, l'ospite non deve digitare niente: la parola
+    // viaggia dentro il link, e sparisce dalla barra degli indirizzi.
+    await provaParolaNelLink(mk);
   } catch (e) {
     console.error('  ERRORE:', e.message);
     failures++;

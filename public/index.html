@@ -85,6 +85,7 @@
 
     <p id="home-err" class="err" hidden></p>
     <p id="home-warn" class="warn" hidden></p>
+    <button class="ghost small apri-help">&#10068; Come si gioca</button>
   </div>
 </section>
 
@@ -98,6 +99,7 @@
       <input id="lobby-link" type="text" readonly />
       <button id="btn-copy" class="ghost">Copia</button>
     </div>
+    <p id="link-nota" class="sub qrhint" hidden>Il link contiene gia&#768; la parola d&#39;ordine: chi lo apre non deve scrivere niente.</p>
     <div id="qrwrap" class="qrwrap" hidden>
       <div id="lobby-qr"></div>
       <p class="sub qrhint">Inquadralo con la fotocamera del telefono.</p>
@@ -153,6 +155,7 @@
 
     <p id="lobby-info" class="sub"></p>
     <button id="btn-installa" class="ghost small" hidden>📲 Aggiungi alla schermata home</button>
+    <button class="ghost small apri-help">&#10068; Come si gioca</button>
     <button id="btn-sound2" class="ghost small">🔊 Suoni attivi</button>
     <button id="btn-start" class="primary big" hidden>Inizia la partita</button>
     <p id="lobby-err" class="err" hidden></p>
@@ -183,6 +186,7 @@
   </div>
 
   <div class="hud-right">
+    <button class="iconbtn apri-help" id="btn-help" title="Come si gioca (tasto ?)">?</button>
     <button id="btn-sound" class="iconbtn" title="Suoni">🔊</button>
     <button id="btn-home-pano" class="iconbtn" title="Torna al punto di partenza e azzera lo zoom">⌂</button>
     <button id="btn-fs" class="iconbtn" title="Schermo intero">⛶</button>
@@ -240,6 +244,100 @@
     </div>
   </div>
 </section>
+
+<!-- ============================ HELP ============================ -->
+<div id="help" class="helpwrap" hidden>
+  <div class="help-card" role="dialog" aria-modal="true" aria-labelledby="help-titolo">
+    <div class="help-top">
+      <h2 id="help-titolo">Come si gioca</h2>
+      <button id="btn-help-close" class="iconbtn" title="Chiudi (Esc)">&times;</button>
+    </div>
+
+    <p id="help-benvenuto" class="help-intro" hidden>
+      Prima partita? Ecco tutto in mezzo minuto. Puoi riaprire questa pagina
+      quando vuoi con il <b>?</b> in alto a destra.
+    </p>
+    <p id="help-nota" class="help-nota" hidden>Attenzione: il tempo del round continua a scorrere.</p>
+
+    <section>
+      <h3>In due parole</h3>
+      <p>Ti ritrovi in una strada a caso del mondo, senza sapere dove. Guardati
+      attorno, cerca gli indizi &mdash; la lingua dei cartelli, il colore delle
+      targhe, da che parte si guida, le piante, il tipo di case &mdash; poi metti
+      il segnalino sulla mappa dove pensi di essere. Piu&#768; ci azzecchi, piu&#768; punti.</p>
+    </section>
+
+    <section>
+      <h3>Guardarsi attorno e camminare</h3>
+      <div class="help-tasti">
+        <div><b>trascina</b><span>col dito o col mouse sul panorama: ti giri sul posto</span></div>
+        <div><b>&uarr;</b><span>cammini <em>dove stai guardando</em>. Se ti giri, &ldquo;avanti&rdquo; cambia significato insieme a te</span></div>
+        <div><b>&darr;</b><span>cammini dalla parte opposta</span></div>
+        <div><b>&minus;</b><span>allontana la visuale, se ti sei zoomato dentro</span></div>
+        <div><b>&#8962;</b><span>ti riporta al punto di partenza del round</span></div>
+      </div>
+      <p class="help-piccolo">Se da quella parte non c&#39;e&#768; nessuna foto, il gioco te lo
+      dice invece di portarti da un&#39;altra parte a caso. Non tutte le strade si
+      possono percorrere: la copertura Mapillary e&#768; fatta da volontari.</p>
+    </section>
+
+    <section>
+      <h3>Rispondere</h3>
+      <div class="help-tasti">
+        <div><b>tocca</b><span>la mappa in basso: ci metti il segnalino, e puoi spostarlo quante volte vuoi</span></div>
+        <div><b>Ingrandisci</b><span>apre la mappa grande, per essere precisi (tasto <b>M</b>)</span></div>
+        <div><b>Metti il segnalino</b><span>conferma la risposta, e non si torna indietro (tasto <b>Invio</b>)</span></div>
+      </div>
+    </section>
+
+    <section>
+      <h3>Il tempo</h3>
+      <p>Appena il primo conferma, agli altri restano <b>trenta secondi</b>: non
+      si puo&#768; far aspettare mezz&#39;ora chi ha gia&#768; risposto. Negli ultimi dieci
+      compare un numerone al centro dello schermo, con un bip a ogni secondo.</p>
+    </section>
+
+    <section>
+      <h3>I punti</h3>
+      <p>Cinquemila se ci si azzecca in pieno, poi calano in fretta con la
+      distanza. La zona del round cambia il metro: in Italia sbagliare di 300 km
+      costa moltissimo, nel Mondo molto meno.</p>
+    </section>
+
+    <section>
+      <h3>L&#39;aiutino</h3>
+      <p>Il pulsante <b>&#128161;</b> in alto rivela il continente (o l&#39;area
+      d&#39;Europa, o la zona d&#39;Italia) in cambio del <b>30% dei punti</b> di quel
+      round. Il primo tocco avverte, il secondo conferma: non parte per sbaglio.</p>
+    </section>
+
+    <section>
+      <h3>Se giocate a forze diverse</h3>
+      <p>In lobby, chi ospita puo&#768; dare un <b>vantaggio</b> a chi e&#768; in
+      difficolta&#768; &mdash; +15%, +30%, +50% &mdash; che gli allarga il metro del
+      punteggio. Si vede solo in lobby, mai durante la partita.</p>
+    </section>
+
+    <section>
+      <h3>Se qualcosa si inceppa</h3>
+      <div class="help-tasti">
+        <div><b>schermo nero</b><span>aspetta otto secondi: il gioco passa da solo alla modalita&#768; semplice, con la foto trascinabile. Il round si gioca lo stesso</span></div>
+        <div><b>pagina zoomata</b><span>doppio tocco sul panorama rimette tutto a posto; se resta storta compare un pulsante dorato in basso</span></div>
+        <div><b>tutto bloccato</b><span>ricarica la pagina: rientri nella partita da solo, senza perdere niente</span></div>
+      </div>
+    </section>
+
+    <section id="help-tastiera">
+      <h3>Da computer</h3>
+      <p class="help-piccolo"><b>&uarr;</b> e <b>&darr;</b> camminano &middot;
+      <b>M</b> apre e chiude la mappa &middot; <b>Invio</b> conferma &middot;
+      <b>&minus;</b> allontana &middot; <b>0</b> rimette la visuale a posto &middot;
+      <b>?</b> riapre questa pagina.</p>
+    </section>
+
+    <button id="btn-help-ok" class="primary big">Ho capito</button>
+  </div>
+</div>
 
 <div id="flash" class="flash" hidden></div>
 <button id="btn-sblocca" class="sblocca" hidden>Rimetti a posto lo schermo</button>

@@ -181,7 +181,10 @@ Advanced puoi aggiungere `proxy_read_timeout 3600s;`.
 
 Se il dominio è raggiungibile da internet, **metti `GATE_CODE`** nel `.env`.
 Senza, chiunque trovi l'indirizzo può giocare e consumare la tua quota
-Mapillary. È una parola sola, da dire a voce ai vostri.
+Mapillary. È una parola sola, e la digita solo chi crea la partita: il link
+d'invito e il QR se la portano dietro, così dall'altra parte basta scrivere il
+nome. Attenzione però: **quel link vale quanto la parola d'ordine**, mandalo
+agli invitati e non in un gruppo pubblico.
 
 Tieni presente una cosa sul token: il visore panoramico gira nel browser dei
 giocatori, quindi il token Mapillary viene inviato al client. È un *client

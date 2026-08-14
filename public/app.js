@@ -30,6 +30,11 @@ const els = (sel, root = document) => [...root.querySelectorAll(sel)];
 function show(screenId) {
   els('.screen').forEach((s) => s.classList.toggle('active', s.id === screenId));
   S.screen = screenId;
+  // Alla primissima partita le regole si presentano da sole, ma in lobby: e`
+  // l'unico momento in cui nessuno sta perdendo secondi.
+  if (screenId === 'screen-lobby' && !helpGiaVisto()) {
+    setTimeout(() => { if (S.screen === 'screen-lobby') apriHelp({ primaVolta: true }); }, 500);
+  }
 }
 
 /**
@@ -369,8 +374,13 @@ const ON_LOCALHOST = ['localhost', '127.0.0.1', '::1', ''].includes(location.hos
 function renderInvite(code) {
   const lan = S.lanUrls && S.lanUrls[0];
   const base = ON_LOCALHOST && lan ? lan : location.origin;
-  const link = `${base}/?c=${code}`;
+  // Se il server chiede una parola d'ordine, viaggia dentro il link: chi lo
+  // riceve e' gia' uno degli invitati, e farsela digitare a mano su un
+  // telefono e' solo un ostacolo in piu'. Chi entra la salva e la toglie
+  // subito dalla barra degli indirizzi.
+  const link = `${base}/?c=${code}` + (S.gate ? `&p=${encodeURIComponent(S.gate)}` : '');
   $('lobby-link').value = link;
+  $('link-nota').hidden = !S.gate;
 
   const hint = $('lan-hint');
   if (ON_LOCALHOST && !lan) {
@@ -414,6 +424,7 @@ function startRound(msg) {
   S.startImageId = msg.imageId;
   S.thumbUrl = msg.thumbUrl || null;
   S.semplice = false;
+  chiudiHelp(); // se stava leggendo le regole, il round ha la precedenza
   clearTimeout(S.aiutinoTimer);
   const ba = $('btn-aiutino');
   ba.className = 'hud-pill aiutino';
@@ -1306,6 +1317,58 @@ $('btn-aiutino').addEventListener('click', () => {
   send({ type: 'aiutino' });
 });
 
+/* ------------------------------------------------------------ help in linea
+ *
+ * Le regole del gioco stanno tutte qui dentro, raggiungibili da ogni schermata
+ * senza uscire dalla partita. Si apre da solo la prima volta che si arriva in
+ * lobby — quando non c'e' nessun cronometro che corre — e mai piu' dopo:
+ * chi ha gia' giocato non deve trovarselo davanti a ogni partita.
+ */
+
+const HELP_VISTO = 'gd_help_visto';
+
+function helpGiaVisto() {
+  try { return localStorage.getItem(HELP_VISTO) === '1'; } catch { return false; }
+}
+
+function apriHelp({ primaVolta = false } = {}) {
+  const h = $('help');
+  if (!h) return;
+  $('help-benvenuto').hidden = !primaVolta;
+  // Aprirlo durante un round non mette la partita in pausa: meglio dirlo.
+  $('help-nota').hidden = !(S.screen === 'screen-play' && S.deadline && !S.confirmed);
+  $('btn-help-ok').textContent = primaVolta ? 'Giochiamo' : 'Ho capito';
+  h.hidden = false;
+  el('.help-card', h).scrollTop = 0;
+  try { localStorage.setItem(HELP_VISTO, '1'); } catch { /* niente memoria: pazienza */ }
+}
+
+function chiudiHelp() {
+  const h = $('help');
+  if (h) h.hidden = true;
+}
+
+els('.apri-help').forEach((b) => b.addEventListener('click', () => apriHelp()));
+$('btn-help-close').addEventListener('click', chiudiHelp);
+$('btn-help-ok').addEventListener('click', chiudiHelp);
+// clic fuori dal riquadro: chiude, come ci si aspetta da un pannello sovrapposto
+$('help').addEventListener('click', (e) => { if (e.target === $('help')) chiudiHelp(); });
+
+/**
+ * Questo ascolto deve stare PRIMA di quello dei comandi di gioco: a pannello
+ * aperto ferma la propagazione, cosi` le frecce non fanno camminare qualcuno
+ * mentre sta leggendo.
+ */
+document.addEventListener('keydown', (e) => {
+  if (e.target.tagName === 'INPUT') return;
+  if (!$('help').hidden) {
+    e.stopImmediatePropagation();
+    if (['Escape', '?', 'h', 'H'].includes(e.key)) chiudiHelp();
+    return;
+  }
+  if (e.key === '?' || e.key === 'h' || e.key === 'H') apriHelp();
+});
+
 $('btn-fwd').addEventListener('click', () => panoMove(true));
 $('btn-back').addEventListener('click', () => panoMove(false));
 
@@ -1502,7 +1565,25 @@ $('btn-installa').addEventListener('click', async () => {
     }
   } catch { /* offline: pazienza */ }
 
-  const c = new URLSearchParams(location.search).get('c');
+  const par = new URLSearchParams(location.search);
+
+  // Parola d'ordine arrivata col link d'invito: si mette da parte e si toglie
+  // subito dall'indirizzo, cosi` non resta in bella vista nella barra del
+  // browser ne' nella cronologia condivisa. Il ricaricamento la ritrova.
+  const p = par.get('p');
+  if (p) {
+    S.gate = p;
+    $('in-gate').value = p;
+    try { sessionStorage.setItem('gd_gate', p); } catch { /* niente memoria */ }
+    par.delete('p');
+    const pulito = location.pathname + (par.toString() ? `?${par}` : '') + location.hash;
+    try { history.replaceState(null, '', pulito); } catch { /* pazienza */ }
+  } else {
+    try { S.gate = sessionStorage.getItem('gd_gate') || S.gate; } catch { /* niente */ }
+    if (S.gate) $('in-gate').value = S.gate;
+  }
+
+  const c = par.get('c');
   if (!c || !/^[A-Za-z0-9]{4}$/.test(c)) return;
 
   const codice = c.toUpperCase();
@@ -1516,7 +1597,7 @@ $('btn-installa').addEventListener('click', async () => {
   // quello che serve quando ricaricare la pagina e` l'unico modo per uscire da
   // un guaio. Ricaricare non deve mai costare la partita.
   if (S.name && S.playerId) {
-    try { S.gate = sessionStorage.getItem('gd_gate') || ''; } catch { S.gate = ''; }
+    try { S.gate = S.gate || sessionStorage.getItem('gd_gate') || ''; } catch { S.gate = S.gate || ''; }
     S.code = codice;
     S.rientroAutomatico = true;
     $('loading-txt').textContent = 'Rientro nella partita…';

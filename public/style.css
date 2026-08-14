@@ -670,6 +670,121 @@ a.vaia:hover { text-decoration: underline; }
   transform-origin: bottom center;
 }
 
+/* ------------------------------------------------------------- help
+   Sta sopra a tutto, anche al panorama e alle mappe, e deve poter scorrere
+   con il dito: le schermate di gioco hanno touch-action:none, quindi qui va
+   riacceso a mano o sul telefono il testo resterebbe fermo. */
+
+.helpwrap {
+  position: fixed;
+  inset: 0;
+  z-index: 600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: rgba(4, 7, 11, .78);
+  backdrop-filter: blur(3px);
+  animation: sfuma .18s ease both;
+}
+@keyframes sfuma { from { opacity: 0; } to { opacity: 1; } }
+
+.help-card {
+  width: min(560px, 100%);
+  max-height: min(92vh, 900px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  touch-action: pan-y;
+  -webkit-overflow-scrolling: touch;
+  /* Niente padding in alto: l'intestazione appiccicata deve poter stare
+     esattamente sul bordo, altrimenti il testo scorre in una striscia
+     scoperta sopra di lei. */
+  padding: 0 22px 22px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--ombra);
+  animation: entraSu .22s ease both;
+}
+
+.help-top {
+  position: sticky;
+  top: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin: 0 -22px 14px;
+  padding: 20px 22px 12px;
+  background: var(--panel);
+  box-shadow: 0 8px 12px -8px rgba(0, 0, 0, .5);
+  z-index: 1;
+}
+.help-top h2 { margin: 0; font-size: 20px; }
+.help-top .iconbtn { flex: none; font-size: 22px; line-height: 1; }
+
+.help-card section { margin-bottom: 18px; }
+.help-card h3 {
+  margin: 0 0 6px;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+.help-card p { margin: 0 0 8px; font-size: 14.5px; line-height: 1.55; color: #cfd8e4; }
+.help-card b { color: var(--txt); }
+.help-piccolo { font-size: 13px !important; color: var(--dim) !important; }
+
+.help-intro {
+  padding: 11px 13px;
+  background: rgba(63, 185, 80, .1);
+  border: 1px solid rgba(63, 185, 80, .3);
+  border-radius: 10px;
+}
+.help-nota {
+  padding: 9px 13px;
+  color: var(--warn) !important;
+  background: rgba(240, 168, 60, .1);
+  border: 1px solid rgba(240, 168, 60, .32);
+  border-radius: 10px;
+  font-size: 13.5px !important;
+}
+
+/* Una colonna stretta per il comando e una larga per la spiegazione: si legge
+   come una legenda, non come un muro di testo. */
+.help-tasti { display: grid; gap: 8px; }
+.help-tasti > div {
+  display: grid;
+  grid-template-columns: 92px 1fr;
+  gap: 12px;
+  align-items: baseline;
+}
+.help-tasti b {
+  padding: 4px 0;
+  font-size: 14px;
+  font-weight: 700;
+  text-align: center;
+  color: var(--txt);
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+.help-tasti span { font-size: 14px; line-height: 1.5; color: #cfd8e4; }
+.help-tasti em { font-style: normal; color: var(--accent); font-weight: 650; }
+
+@media (max-width: 420px) {
+  .help-tasti > div { grid-template-columns: 74px 1fr; gap: 9px; }
+  .help-tasti b, .help-tasti span { font-size: 13px; }
+  .help-card { padding: 0 16px 18px; }
+  .help-top { margin: 0 -16px 12px; padding: 16px 16px 10px; }
+}
+
+/* Le scorciatoie da tastiera non servono a chi gioca col dito. */
+@media (hover: none) and (pointer: coarse) {
+  #help-tastiera { display: none; }
+}
+
 .toast {
   position: fixed;
   left: 50%;

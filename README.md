@@ -94,12 +94,20 @@ Chi crea la stanza decide zona, numero di round, tempo e andamento. Ogni
 giocatore sceglie il proprio simbolo, che diventa il suo segnalino sulla mappa.
 
 Ogni round mostra un punto a caso della copertura Mapillary. Ci si guarda
-attorno, si cammina con i pulsanti **↑ ↓** a sinistra (o le frecce della
-tastiera): **↑ va sempre dove stai guardando**, quindi se ti giri, "avanti"
-cambia significato insieme a te. Se in quella direzione non c'è nessuna foto,
-te lo dice invece di portarti da un'altra parte, si allontana la visuale col **−** se ci si è zoomati
-dentro, e si mette il segnalino sulla mappa in basso. Il tasto **M** ingrandisce
-la mappa, **Invio** conferma, **0** rimette la visuale a posto.
+attorno trascinando col dito o col mouse, e si cammina con i pulsanti **↑ ↓** a
+sinistra (o con le frecce della tastiera): **↑ va sempre dove stai guardando**,
+quindi se ti giri, "avanti" cambia significato insieme a te. Se da quella parte
+non c'è nessuna foto il gioco te lo dice, invece di portarti da un'altra parte.
+Il **−** allontana la visuale se ci si è zoomati dentro e il **⌂** riporta al
+punto di partenza; poi si mette il segnalino sulla mappa in basso. Da tastiera:
+**M** ingrandisce la mappa, **Invio** conferma, **0** rimette la visuale a
+posto.
+
+**Le regole stanno dentro il gioco.** Il **?** in alto a destra — e "Come si
+gioca" in home e in lobby — apre un pannello con i comandi, il punteggio,
+l'aiutino e le vie d'uscita quando qualcosa si inceppa. Alla primissima partita
+si apre da solo, ma in lobby: mai durante un round, dove costerebbe secondi.
+Poi non si fa più vedere, a meno di chiamarlo.
 
 Il round si chiude quando hanno risposto tutti. Appena il primo piazza la
 bandiera, agli altri restano **trenta secondi** — negli ultimi dieci compare un
@@ -168,6 +176,12 @@ Due avvertenze importanti.
 
 Se lo esponi su internet **metti `GATE_CODE`** nelle variabili d'ambiente: senza,
 chiunque trovi l'indirizzo può giocare e consumare la tua quota Mapillary.
+
+La parola d'ordine la digita solo chi crea la partita: il link d'invito (e il
+QR) se la portano dietro, e chi li apre entra scrivendo solo il proprio nome —
+la parola viene messa da parte e tolta subito dalla barra degli indirizzi. Il
+rovescio della medaglia è che **il link vale quanto la parola d'ordine**: chi lo
+riceve può entrare, quindi mandalo agli invitati e non in un gruppo pubblico.
 
 E attenzione al **WebSocket**: il gioco vive tutto lì sopra. Se il reverse proxy
 non passa l'upgrade del protocollo, la lobby si vede ma la partita non parte
