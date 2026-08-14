@@ -246,9 +246,30 @@ function handle(msg) {
 
 /* ------------------------------------------------------------ rendering */
 
+/**
+ * La parola d'ordine si salva in localStorage, non solo in sessionStorage:
+ * la sessione muore con la scheda (e a ogni avvio dell'app installata),
+ * e senza parola il link e il QR d'invito uscivano monchi.
+ */
+function salvaGate(g) {
+  S.gate = String(g || '');
+  try { localStorage.setItem('gd_gate', S.gate); } catch { /* niente memoria */ }
+  try { sessionStorage.setItem('gd_gate', S.gate); } catch { /* niente */ }
+}
+function gateSalvato() {
+  try {
+    return localStorage.getItem('gd_gate') || sessionStorage.getItem('gd_gate') || '';
+  } catch { return ''; }
+}
+
 function renderRoom() {
   const r = S.room;
   if (!r) return;
+
+  // La stanza conosce la propria parola d'ordine (arriva solo a chi l'ha
+  // gia' superata): e' la fonte piu' affidabile per link e QR d'invito,
+  // qualunque cosa questo dispositivo si ricordi.
+  if (r.gate && r.gate !== S.gate) salvaGate(r.gate);
 
   // lobby
   $('lobby-code').textContent = r.code;
@@ -1185,8 +1206,7 @@ function readName() {
   }
   $('home-err').hidden = true;
   S.name = n;
-  S.gate = $('in-gate').value;
-  try { sessionStorage.setItem('gd_gate', S.gate); } catch { /* niente */ }
+  salvaGate($('in-gate').value);
   localStorage.setItem('gd_name', n);
   return n;
 }
@@ -1591,14 +1611,13 @@ $('btn-installa').addEventListener('click', async () => {
   // browser ne' nella cronologia condivisa. Il ricaricamento la ritrova.
   const p = par.get('p');
   if (p) {
-    S.gate = p;
+    salvaGate(p);
     $('in-gate').value = p;
-    try { sessionStorage.setItem('gd_gate', p); } catch { /* niente memoria */ }
     par.delete('p');
     const pulito = location.pathname + (par.toString() ? `?${par}` : '') + location.hash;
     try { history.replaceState(null, '', pulito); } catch { /* pazienza */ }
   } else {
-    try { S.gate = sessionStorage.getItem('gd_gate') || S.gate; } catch { /* niente */ }
+    S.gate = gateSalvato() || S.gate;
     if (S.gate) $('in-gate').value = S.gate;
   }
 
@@ -1616,7 +1635,7 @@ $('btn-installa').addEventListener('click', async () => {
   // quello che serve quando ricaricare la pagina e` l'unico modo per uscire da
   // un guaio. Ricaricare non deve mai costare la partita.
   if (S.name && S.playerId) {
-    try { S.gate = S.gate || sessionStorage.getItem('gd_gate') || ''; } catch { S.gate = S.gate || ''; }
+    S.gate = S.gate || gateSalvato();
     S.code = codice;
     S.rientroAutomatico = true;
     $('loading-txt').textContent = 'Rientro nella partita…';

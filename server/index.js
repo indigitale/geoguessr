@@ -64,6 +64,7 @@ const fakeProvider = async ({ scope, exclude }) => {
 const game = new GameServer({
   token: TOKEN,
   conAlbo: !ALBO_OFF,
+  gate: GATE_CODE,
   ...(FAKE ? { provider: fakeProvider } : {}),
 });
 

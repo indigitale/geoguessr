@@ -57,6 +57,24 @@ async function provaParolaNelLink(mk) {
     ok(await H.isVisible('#link-nota'), 'e la lobby avverte che il link la contiene');
     const codeG = (await H.textContent('#lobby-code')).trim();
 
+    // Il QR codifica lo stesso link, parola compresa.
+    const qrLink1 = await H.evaluate(() => document.getElementById('lobby-qr').dataset.link);
+    ok(!!qrLink1 && qrLink1.includes(`p=${encodeURIComponent(PAROLA)}`),
+      'anche il QR si porta dietro la parola d`ordine');
+
+    // E la parola arriva dalla STANZA, non dalla memoria del dispositivo:
+    // un tablet che l'aveva persa (sessione nuova, app riaperta) produceva
+    // link e QR monchi, e chi li apriva restava fuori.
+    await H.evaluate(() => {
+      S.gate = '';
+      try { localStorage.removeItem('gd_gate'); sessionStorage.removeItem('gd_gate'); } catch {}
+      document.getElementById('lobby-qr').dataset.link = ''; // forza il ridisegno
+      renderRoom();
+    });
+    const qrLink2 = await H.evaluate(() => document.getElementById('lobby-qr').dataset.link);
+    ok(!!qrLink2 && qrLink2.includes(`p=${encodeURIComponent(PAROLA)}`),
+      'il QR resta completo anche se il dispositivo aveva dimenticato la parola');
+
     // l'ospite apre il link e non tocca il campo della parola
     const G = await mk('ospite-gate', { width: 390, height: 844 });
     await G.goto(invito.replace(/^https?:\/\/[^/]+/, base), { waitUntil: 'domcontentloaded' });
@@ -72,6 +90,8 @@ async function provaParolaNelLink(mk) {
     await G.waitForSelector('#screen-lobby.active', { timeout: 8000 });
     ok((await G.textContent('#lobby-code')).trim() === codeG,
       'entra nella stanza senza aver digitato la parola d`ordine');
+    ok(await G.evaluate(() => localStorage.getItem('gd_gate')) === PAROLA,
+      'e la parola gli resta salvata anche per le prossime aperture');
 
     // e chi arriva senza link resta comunque fuori
     const X = await mk('estraneo-gate', { width: 900, height: 700 });

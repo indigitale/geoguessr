@@ -53,10 +53,15 @@ function clean(name) {
 
 export class GameServer {
   // provider e' iniettabile: in produzione e' Mapillary, nei test e' finto.
-  constructor({ token, provider = pickLocation, conAlbo = true }) {
+  constructor({ token, provider = pickLocation, conAlbo = true, gate = '' }) {
     this.token = token;
     this.provider = provider;
     this.conAlbo = conAlbo; // i test non devono sporcare l'albo vero
+    // La parola d'ordine viaggia anche nello stato della stanza: la ricevono
+    // solo i giocatori che l'hanno gia' superata, e serve al client per
+    // costruire link e QR d'invito senza dipendere da cosa si ricorda —
+    // il QR di un tablet che l'aveva "dimenticata" usciva senza parola.
+    this.gate = String(gate || '');
     this.rooms = new Map();
     setInterval(() => this.sweep(), 10 * 60 * 1000).unref?.();
   }
@@ -152,6 +157,7 @@ export class GameServer {
   snapshot(room) {
     return {
       code: room.code,
+      gate: this.gate || null,
       scope: room.scope,
       rounds: room.rounds,
       timer: room.timer,
