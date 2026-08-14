@@ -94,8 +94,10 @@ Chi crea la stanza decide zona, numero di round, tempo e andamento. Ogni
 giocatore sceglie il proprio simbolo, che diventa il suo segnalino sulla mappa.
 
 Ogni round mostra un punto a caso della copertura Mapillary. Ci si guarda
-attorno, si cammina lungo la strada con i pulsanti **↑ ↓** a sinistra (o le
-frecce della tastiera), si allontana la visuale col **−** se ci si è zoomati
+attorno, si cammina con i pulsanti **↑ ↓** a sinistra (o le frecce della
+tastiera): **↑ va sempre dove stai guardando**, quindi se ti giri, "avanti"
+cambia significato insieme a te. Se in quella direzione non c'è nessuna foto,
+te lo dice invece di portarti da un'altra parte, si allontana la visuale col **−** se ci si è zoomati
 dentro, e si mette il segnalino sulla mappa in basso. Il tasto **M** ingrandisce
 la mappa, **Invio** conferma, **0** rimette la visuale a posto.
 

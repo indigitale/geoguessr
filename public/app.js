@@ -428,7 +428,8 @@ function startRound(msg) {
   clearTimeout(S.forceTimer);
   // I comandi di movimento ripartono sempre attivi, qualunque cosa sia
   // successa nel round precedente.
-  S.moveLock = 0;
+  S.inMovimento = false;
+  S.movimentoFinoA = 0;
   S.moveGen = (S.moveGen || 0) + 1; // invalida eventuali movimenti in sospeso
   for (const id of ['btn-fwd', 'btn-back', 'btn-zoomout']) {
     $(id).disabled = false;
@@ -656,7 +657,7 @@ function mostraGuasto(titolo) {
 
 /* ------------------------------------------------- spostarsi nel panorama */
 
-const MOVE_TIMEOUT_MS = 5000; // oltre questo, MapillaryJS non ce la fa
+const MOVE_TIMEOUT_MS = 3500; // oltre questo, MapillaryJS non ce la fa
 const MOVE_LOCK_MS = 800;     // anti doppio-tap, non attesa del movimento
 
 function conScadenza(promessa, ms) {
@@ -667,71 +668,136 @@ function conScadenza(promessa, ms) {
 }
 
 /**
- * Next e Prev seguono la sequenza cosi' come e' stata ripresa, NON la
- * direzione in cui stai guardando: se ti giri, "il prossimo scatto" ti manda
- * all'indietro rispetto a quello che vedi. Qui si confronta la bussola del
- * visore con quella dello scatto per capire da che parte stai guardando, e si
- * sceglie di conseguenza.
+ * DOVE PORTA OGNI STRADA
+ *
+ * Ogni collegamento fra due foto (NavigationEdge) porta con se'
+ * `worldMotionAzimuth`: la direzione geografica REALE dello spostamento da
+ * qui alla foto vicina. E` questo il dato giusto per rispondere alla domanda
+ * "cosa c'e' davanti a me adesso".
+ *
+ * Prima confrontavo la bussola del giocatore con il `compassAngle` dello
+ * scatto, che su un panorama a 360 gradi indica solo come e` orientata
+ * l'immagine e non ha niente a che vedere con la direzione di marcia: da li'
+ * il "premo avanti e vado indietro".
+ *
+ * L'azimut e` in radianti, in senso antiorario a partire da Est. La bussola
+ * del visore e` in gradi, in senso orario a partire da Nord. Di qui la
+ * conversione.
  */
-async function versoSequenza(forward) {
-  const D = mapillary.NavigationDirection;
+function rottaDellEdge(edge) {
+  const az = edge?.data?.worldMotionAzimuth;
+  if (!Number.isFinite(az)) return null;
+  return (90 - (az * 180) / Math.PI + 360) % 360;
+}
+
+/** Differenza fra due rotte, sempre fra 0 e 180 gradi. */
+function scarto(a, b) {
+  return Math.abs(((a - b + 540) % 360) - 180);
+}
+
+/** Tutti i collegamenti disponibili dall'immagine corrente, senza doppioni. */
+function collegamenti(img) {
+  const tutti = [
+    ...(img?.spatialEdges?.edges || []),
+    ...(img?.sequenceEdges?.edges || []),
+  ];
+  const visti = new Set();
+  return tutti.filter((e) => {
+    if (!e || !e.target || visti.has(e.target)) return false;
+    visti.add(e.target);
+    return true;
+  });
+}
+
+// Oltre questo scarto non e' piu' "davanti a me": meglio dire che di la` non
+// si va, piuttosto che spedire il giocatore in una direzione che non aveva
+// chiesto.
+const APERTURA = 100;
+
+/**
+ * La foto verso cui andare, scelta in base a dove il giocatore sta guardando.
+ * Torna null se in quella direzione non c'e' niente.
+ */
+async function bersaglio(forward) {
+  let img;
+  let bussola;
   try {
-    const [bussola, img] = await Promise.all([
-      Promise.resolve(S.viewer.getBearing()),
+    [img, bussola] = await Promise.all([
       Promise.resolve(S.viewer.getImage()),
+      Promise.resolve(S.viewer.getBearing()),
     ]);
-    const scatto = img?.computedCompassAngle ?? img?.compassAngle;
-    if (typeof bussola === 'number' && typeof scatto === 'number') {
-      // differenza con segno riportata in [-180, 180]
-      const delta = Math.abs(((bussola - scatto + 540) % 360) - 180);
-      const guardaNelVersoDiMarcia = delta <= 90;
-      if (forward) return guardaNelVersoDiMarcia ? D.Next : D.Prev;
-      return guardaNelVersoDiMarcia ? D.Prev : D.Next;
-    }
-  } catch { /* niente bussola: si tira a indovinare */ }
-  return forward ? D.Next : D.Prev;
+  } catch {
+    return null;
+  }
+  if (typeof bussola !== 'number' || !Number.isFinite(bussola)) return null;
+
+  const edges = collegamenti(img);
+  if (!edges.length) return null;
+
+  const voluta = forward ? bussola : (bussola + 180) % 360;
+  let scelto = null;
+  let minimo = Infinity;
+  for (const e of edges) {
+    const rotta = rottaDellEdge(e);
+    if (rotta === null) continue;
+    const d = scarto(rotta, voluta);
+    if (d < minimo) { minimo = d; scelto = e.target; }
+  }
+  return minimo <= APERTURA ? scelto : null;
 }
 
 /**
- * Un passo avanti o indietro rispetto a DOVE STAI GUARDANDO.
+ * Un passo nella direzione in cui stai guardando.
  *
- * Si prova prima StepForward/StepBackward, che tengono conto dello sguardo.
- * Se in quella direzione non c'e' nessuno scatto vicino si ripiega sulla
- * sequenza, scegliendo pero' il verso giusto con la bussola.
+ * Si prova nell'ordine: il collegamento geograficamente piu' vicino al tuo
+ * sguardo, poi la logica interna di MapillaryJS, poi la sequenza. Il primo
+ * tentativo e` quello che deve funzionare quasi sempre; gli altri due sono
+ * reti di sicurezza per le immagini con dati incompleti.
  *
- * Il blocco anti doppio-tap scade a tempo e NON aspetta la fine del
- * movimento: se MapillaryJS resta appeso, i pulsanti tornano vivi da soli
- * invece di restare muti per il resto della partita.
+ * Finche` un movimento e` in corso i tocchi successivi vengono ignorati, ma
+ * il blocco scade comunque da solo: non deve poter restare incastrato.
  */
 async function panoMove(forward) {
   if (!S.viewer || !window.mapillary || !mapillary.NavigationDirection) return;
   const ora = Date.now();
-  if (ora < (S.moveLock || 0)) return;
-  S.moveLock = ora + MOVE_LOCK_MS;
+  if (S.inMovimento && ora < (S.movimentoFinoA || 0)) return;
+  S.inMovimento = true;
+  S.movimentoFinoA = ora + 2500;
 
   const D = mapillary.NavigationDirection;
-  const primo = forward ? D.StepForward : D.StepBackward;
-  const tentativi = [primo, await versoSequenza(forward)];
   const btn = forward ? $('btn-fwd') : $('btn-back');
   btn.classList.add('moving');
-
-  // Se nel frattempo cambia il round, questa chiamata deve smettere di agire:
-  // una richiesta rimasta appesa non deve spostare il panorama del round dopo.
   const gen = S.moveGen || 0;
 
   try {
-    for (const d of tentativi) {
+    // 1. il collegamento che punta dove stai guardando
+    const dove = await bersaglio(forward);
+    if (gen !== (S.moveGen || 0)) return;
+    if (dove) {
+      try {
+        await conScadenza(S.viewer.moveTo(dove), MOVE_TIMEOUT_MS);
+        return;
+      } catch { /* non raggiungibile: si prova altro */ }
+    }
+
+    // 2. e 3. reti di sicurezza
+    for (const d of [forward ? D.StepForward : D.StepBackward,
+                     forward ? D.Next : D.Prev]) {
       if (gen !== (S.moveGen || 0)) return;
       try {
         await conScadenza(S.viewer.moveDir(d), MOVE_TIMEOUT_MS);
         return;
-      } catch { /* direzione non disponibile: si prova la prossima */ }
+      } catch { /* direzione non disponibile */ }
     }
+
     if (gen !== (S.moveGen || 0)) return;
-    toast(forward ? 'Da questa parte la strada finisce qui.' : 'Sei già all’inizio della strada.');
+    toast(forward ? 'Da questa parte la strada finisce qui.' : 'Da questa parte non si torna oltre.');
   } finally {
     btn.classList.remove('moving');
-    if (gen === (S.moveGen || 0)) S.moveLock = 0;
+    if (gen === (S.moveGen || 0)) {
+      S.inMovimento = false;
+      S.movimentoFinoA = 0;
+    }
   }
 }
 

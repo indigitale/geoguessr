@@ -159,11 +159,13 @@ async function main() {
     // caso 1: moveDir non risponde MAI
     await A.evaluate(() => {
       window.__mosse = [];
-      S.moveLock = 0;
+      S.inMovimento = false; S.movimentoFinoA = 0;
       S.moveGen = (S.moveGen || 0) + 1;
       S.viewer = {
         moveDir: (d) => { window.__mosse.push(d); return new Promise(() => {}); },
+        moveTo: () => new Promise(() => {}),
         getImage: () => Promise.resolve({ id: 'x' }),
+        getBearing: () => Promise.resolve(0),
         on: () => {},
       };
     });
@@ -173,62 +175,110 @@ async function main() {
       'due tocchi ravvicinati contano come uno solo');
     ok(await A.locator('#btn-fwd.moving').count() === 1, 'il pulsante segnala che si sta muovendo');
 
-    await A.waitForTimeout(1100); // oltre il blocco anti doppio-tap
+    // Il blocco dura 2,5 secondi: serve a impedire che i tocchi ripetuti si
+    // accumulino ("non si ferma piu`"), ma deve scadere da solo anche se il
+    // movimento resta appeso per sempre.
+    await A.waitForTimeout(2700);
     await A.click('#btn-fwd');
-    ok(await A.evaluate(() => window.__mosse.length) === 2,
-      'con un moveDir appeso i pulsanti tornano vivi da soli');
+    ok(await A.evaluate(() => window.__mosse.length) >= 2,
+      'con un movimento appeso i pulsanti tornano vivi da soli dopo il blocco');
 
-    // caso 2: lo sguardo comanda. Con StepForward/StepBackward non disponibili
-    // si ripiega sulla sequenza, ma il verso va scelto con la bussola: se il
-    // giocatore si e` girato, "avanti" per lui e` Prev, non Next.
-    const provaBussola = async (bussola, scatto) => {
-      await A.evaluate(({ b, s }) => {
-        window.__mosse = [];
-        S.moveLock = 0;
+    // caso 2: LO SGUARDO COMANDA.
+    // Un incrocio con due strade opposte, una verso nord e una verso sud.
+    // "Avanti" deve prendere quella verso cui il giocatore sta guardando,
+    // qualunque sia l'orientamento della foto: era esattamente il bug del
+    // "premo avanti e vado indietro".
+    const incrocio = () => ({
+      id: 'qui',
+      // worldMotionAzimuth: radianti, antiorario da Est.
+      //   +PI/2 = verso nord,  -PI/2 = verso sud
+      spatialEdges: { cached: true, edges: [
+        { target: 'verso-nord', data: { worldMotionAzimuth: Math.PI / 2 } },
+        { target: 'verso-sud', data: { worldMotionAzimuth: -Math.PI / 2 } },
+      ] },
+      sequenceEdges: { cached: true, edges: [] },
+    });
+
+    const preparaIncrocio = async (bussola) => {
+      await A.evaluate((b) => {
+        window.__andati = [];
+        S.inMovimento = false;
+        S.movimentoFinoA = 0;
         S.moveGen = (S.moveGen || 0) + 1;
-        const D = mapillary.NavigationDirection;
+        const img = {
+          id: 'qui',
+          spatialEdges: { cached: true, edges: [
+            { target: 'verso-nord', data: { worldMotionAzimuth: Math.PI / 2 } },
+            { target: 'verso-sud', data: { worldMotionAzimuth: -Math.PI / 2 } },
+          ] },
+          sequenceEdges: { cached: true, edges: [] },
+        };
         S.viewer = {
-          moveDir: (d) => {
-            window.__mosse.push(d);
-            // nessuno scatto vicino nella direzione dello sguardo
-            return d === D.StepForward || d === D.StepBackward
-              ? Promise.reject(new Error('nessun bordo'))
-              : Promise.resolve();
-          },
-          getBearing: () => b,
-          getImage: () => Promise.resolve({ id: 'x', computedCompassAngle: s }),
-          on: () => {},
+          getImage: () => Promise.resolve(img),
+          getBearing: () => Promise.resolve(b),
+          moveTo: (id) => { window.__andati.push(id); return Promise.resolve(); },
+          moveDir: () => Promise.reject(new Error('non serve')),
+          getZoom: () => 0, setZoom: () => {}, setCenter: () => {}, on: () => {},
         };
-      }, { b: bussola, s: scatto });
-      await A.click('#btn-fwd');
-      await A.waitForFunction(() => window.__mosse.length >= 2, null, { timeout: 6000 });
-      return A.evaluate(() => {
-        const D = mapillary.NavigationDirection;
-        return {
-          primo: window.__mosse[0] === D.StepForward,
-          ripiego: window.__mosse[1] === D.Next ? 'Next' : window.__mosse[1] === D.Prev ? 'Prev' : '?',
-        };
-      });
+      }, bussola);
     };
 
-    const dritto = await provaBussola(0, 0); // guarda nel verso di marcia
-    ok(dritto.primo, 'prova prima il passo nella direzione dello sguardo');
-    ok(dritto.ripiego === 'Next', 'guardando avanti, "avanti" segue la sequenza in avanti');
+    const vaiE = async (pulsante) => {
+      await A.click(pulsante);
+      await A.waitForFunction(() => window.__andati.length > 0, null, { timeout: 6000 });
+      const dove = await A.evaluate(() => window.__andati[0]);
+      await A.waitForSelector(pulsante + ':not(.moving)', { timeout: 5000 });
+      return dove;
+    };
 
-    await A.waitForSelector('#btn-fwd:not(.moving)', { timeout: 4000 });
-    const girato = await provaBussola(180, 0); // si e` girato di 180 gradi
-    ok(girato.ripiego === 'Prev',
-      'girato di 180 gradi, "avanti" va nel verso opposto della sequenza (era il bug)');
+    await preparaIncrocio(0);      // guarda a nord
+    ok(await vaiE('#btn-fwd') === 'verso-nord',
+      'guardando a nord, "avanti" prende la strada verso nord');
 
-    await A.waitForSelector('#btn-fwd:not(.moving)', { timeout: 4000 });
-    ok(true, 'il pulsante si sblocca dopo un movimento riuscito');
+    await preparaIncrocio(180);    // si gira e guarda a sud
+    ok(await vaiE('#btn-fwd') === 'verso-sud',
+      'guardando a sud, la STESSA freccia prende la strada verso sud (era il bug)');
+
+    await preparaIncrocio(0);      // guarda a nord
+    ok(await vaiE('#btn-back') === 'verso-sud',
+      '"indietro" e` sempre l`opposto di dove stai guardando');
+
+    // una sola strada, e sta alle spalle: non deve teletrasportarti
+    await A.evaluate(() => {
+      window.__andati = []; window.__dir = [];
+      S.inMovimento = false; S.movimentoFinoA = 0;
+      S.moveGen = (S.moveGen || 0) + 1;
+      const img = {
+        id: 'qui',
+        spatialEdges: { cached: true, edges: [
+          { target: 'alle-spalle', data: { worldMotionAzimuth: -Math.PI / 2 } },
+        ] },
+        sequenceEdges: { cached: true, edges: [] },
+      };
+      S.viewer = {
+        getImage: () => Promise.resolve(img),
+        getBearing: () => Promise.resolve(0),
+        moveTo: (id) => { window.__andati.push(id); return Promise.resolve(); },
+        moveDir: (d) => { window.__dir.push(d); return Promise.reject(new Error('niente')); },
+        getZoom: () => 0, setZoom: () => {}, setCenter: () => {}, on: () => {},
+      };
+    });
+    await A.click('#btn-fwd');
+    await A.waitForSelector('#toast:not([hidden])', { timeout: 8000 });
+    ok(await A.evaluate(() => window.__andati.length) === 0,
+      'con la sola strada alle spalle, "avanti" non ti spedisce indietro');
+    ok((await A.textContent('#toast')).includes('finisce'), 'e ti avvisa che di la` non si va');
+    await A.waitForSelector('#btn-fwd:not(.moving)', { timeout: 5000 });
 
     // caso 3: nessuna direzione disponibile -> avviso, niente blocco
     await A.evaluate(() => {
       window.__mosse = [];
-      S.moveLock = 0;
+      S.inMovimento = false; S.movimentoFinoA = 0;
       S.moveGen = (S.moveGen || 0) + 1;
       S.viewer = {
+        getImage: () => Promise.resolve({ id: 'x' }),
+        getBearing: () => Promise.resolve(0),
+        moveTo: () => Promise.reject(new Error('niente')),
         moveDir: (d) => { window.__mosse.push(d); return Promise.reject(new Error('niente')); },
         getImage: () => Promise.resolve({ id: 'x' }),
         on: () => {},
@@ -244,6 +294,7 @@ async function main() {
     // ------------------------------------------------------------------
     await A.evaluate(() => {
       S.moveGen = (S.moveGen || 0) + 1;
+      S.inMovimento = false; S.movimentoFinoA = 0;
       window.__zoom = 3; // partiamo da dentro, come chi ha pinzato
       S.viewer = {
         moveDir: () => Promise.resolve(),
@@ -373,7 +424,7 @@ async function main() {
     });
     ok(await A.isHidden('#flash'), 'la propria bandiera non fa lampeggiare il proprio schermo');
 
-    await A.evaluate(() => { S.viewer = null; S.moveLock = 0; });
+    await A.evaluate(() => { S.viewer = null; S.inMovimento = false; });
     // Ogni elemento marcato hidden deve essere davvero invisibile: le classi
     // che impostano display sovrascrivono l'attributo se non lo si forza.
     const fantasmi = await A.evaluate(() =>
