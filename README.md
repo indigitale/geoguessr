@@ -130,7 +130,11 @@ l'ultimo nel mondo. E se finite a pari punti scatta uno **spareggio**: un round
 secco fra chi è in testa, vince chi va più vicino.
 
 Alla fine, una mappa con tutti i round giocati, i vostri tiri collegati al punto
-giusto e un cerchio dorato sul colpo migliore della partita.
+giusto e un cerchio dorato sul colpo migliore della partita. Da lì il pulsante
+**📸 Foto ricordo** disegna un'immagine con classifica, mappa dei round e colpo
+migliore, pronta per WhatsApp: si genera tutta sul dispositivo, senza servizi
+esterni. E per chi vince, coriandoli (rispettando chi ha chiesto al sistema
+meno animazioni).
 
 ## 4. L'albo d'oro
 

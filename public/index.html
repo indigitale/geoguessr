@@ -240,12 +240,28 @@
       <ul id="final-list" class="standings"></ul>
       <div id="final-novita" class="novita" hidden></div>
       <div id="final-albo" class="albo" hidden></div>
+      <button id="btn-foto" class="ghost small" hidden>&#128248; Foto ricordo da condividere</button>
       <button id="btn-again" class="primary big" hidden>Nuova partita</button>
       <p id="final-info" class="sub"></p>
       <button id="btn-leave2" class="ghost small">Esci</button>
     </div>
   </div>
 </section>
+
+<!-- ============================ FOTO RICORDO ============================ -->
+<div id="foto" class="helpwrap" hidden>
+  <div class="help-card foto-card" role="dialog" aria-modal="true" aria-label="Foto ricordo">
+    <div class="help-top">
+      <h2>Foto ricordo</h2>
+      <button id="btn-foto-close" class="iconbtn" title="Chiudi (Esc)">&times;</button>
+    </div>
+    <img id="foto-img" alt="Riepilogo della partita" />
+    <div class="foto-azioni">
+      <button id="btn-foto-share" class="primary">Condividi</button>
+      <button id="btn-foto-save" class="ghost">Scarica</button>
+    </div>
+  </div>
+</div>
 
 <!-- ============================ HELP ============================ -->
 <div id="help" class="helpwrap" hidden>

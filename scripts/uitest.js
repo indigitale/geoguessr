@@ -731,6 +731,24 @@ async function main() {
     // albo d'oro: dopo una partita il testa a testa deve esserci
     ok(await A.isVisible('#final-albo'), 'a fine partita compare l`albo d`oro');
     ok((await A.textContent('#final-albo')).includes('Testa a testa'), 'l`albo mostra il testa a testa');
+
+    // ------------------------------------------------------ foto ricordo
+    ok(await A.isVisible('#btn-foto'), 'a fine partita si puo` fare la foto ricordo');
+    await A.click('#btn-foto');
+    await A.waitForSelector('#foto:not([hidden])', { timeout: 6000 });
+    const fotoSrc = await A.getAttribute('#foto-img', 'src');
+    ok(!!fotoSrc && fotoSrc.startsWith('data:image/png') && fotoSrc.length > 20000,
+      'la foto viene disegnata davvero, in locale, senza servizi esterni');
+    const fotoDim = await A.evaluate(() => new Promise((r) => {
+      const i = document.getElementById('foto-img');
+      if (i.naturalWidth) return r([i.naturalWidth, i.naturalHeight]);
+      i.onload = () => r([i.naturalWidth, i.naturalHeight]);
+    }));
+    ok(fotoDim[0] === 1080 && fotoDim[1] === 1350, `nel formato giusto per WhatsApp (${fotoDim.join('x')})`);
+    ok(await A.isVisible('#btn-foto-share') && await A.isVisible('#btn-foto-save'),
+      'con i pulsanti per condividerla o scaricarla');
+    await A.keyboard.press('Escape');
+    ok(await A.isHidden('#foto'), 'e si chiude con Esc come tutto il resto');
     await A.screenshot({ path: 'shot-final.png' });
     await B.screenshot({ path: 'shot-final-mobile.png' });
 

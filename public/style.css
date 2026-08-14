@@ -794,6 +794,30 @@ a.vaia:hover { text-decoration: underline; }
   #help-tastiera { display: none; }
 }
 
+/* --------------------------------------------------------- foto ricordo */
+
+.foto-card { width: min(440px, 100%); }
+.foto-card img {
+  display: block;
+  width: 100%;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+}
+.foto-azioni { display: flex; gap: 8px; margin-top: 12px; }
+.foto-azioni .primary { flex: 2; padding: 13px; }
+.foto-azioni .ghost { flex: 1; margin: 0; width: auto; }
+
+/* Coriandoli del vincitore: un canvas sopra tutto che non intercetta niente
+   e si toglie da solo a festa finita. */
+.coriandoli {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 300;
+}
+
 .toast {
   position: fixed;
   left: 50%;

@@ -446,6 +446,7 @@ function startRound(msg) {
   S.thumbUrl = msg.thumbUrl || null;
   S.semplice = false;
   chiudiHelp(); // se stava leggendo le regole, il round ha la precedenza
+  chiudiFoto();
   clearTimeout(S.aiutinoTimer);
   const ba = $('btn-aiutino');
   ba.className = 'hud-pill aiutino';
@@ -1056,6 +1057,11 @@ function showFinal(msg) {
   $('final-title').textContent = !primo ? 'Fine partita'
     : pari ? 'Pareggio!' : `Vince ${primo.name}!`;
   if (primo && !pari && primo.playerId === S.playerId) Suoni.trionfo();
+  if (primo && !pari) coriandoli();
+
+  // la foto ricordo si disegna dai round giocati: senza storia, niente foto
+  S.ultimoFinale = msg;
+  $('btn-foto').hidden = !(msg.history && msg.history.length && msg.standings.length);
 
   // record e primati appena battuti
   const nov = $('final-novita');
@@ -1121,6 +1127,276 @@ function disegnaRiepilogo(storia) {
     if (tutti.length > 1) S.finalMap.fitBounds(L.latLngBounds(tutti).pad(0.2));
     else if (tutti.length) S.finalMap.setView(tutti[0], 5);
   }, 90);
+}
+
+/* ----------------------------------------------------------- foto ricordo
+ *
+ * Un'immagine da mandare su WhatsApp a fine partita: classifica, mappa
+ * stilizzata dei round e colpo migliore. Si disegna tutta in locale su un
+ * canvas — nessun servizio esterno, funziona anche senza rete — e si
+ * condivide col foglio di condivisione del telefono quando c'e'.
+ */
+
+function arrotondato(x, px, py, w, h, r) {
+  x.beginPath();
+  x.moveTo(px + r, py);
+  x.arcTo(px + w, py, px + w, py + h, r);
+  x.arcTo(px + w, py + h, px, py + h, r);
+  x.arcTo(px, py + h, px, py, r);
+  x.arcTo(px, py, px + w, py, r);
+  x.closePath();
+}
+
+function disegnaFoto(fin) {
+  const W = 1080, H = 1350;
+  const c = document.createElement('canvas');
+  c.width = W; c.height = H;
+  const x = c.getContext('2d');
+  const F = (peso, px) => `${peso} ${px}px system-ui, -apple-system, "Segoe UI", sans-serif`;
+
+  // sfondo: lo stesso buio del gioco, con l'alone verde in alto
+  x.fillStyle = '#0b0e13';
+  x.fillRect(0, 0, W, H);
+  const alone = x.createRadialGradient(W / 2, 0, 60, W / 2, 0, 720);
+  alone.addColorStop(0, 'rgba(63,185,80,.16)');
+  alone.addColorStop(1, 'rgba(63,185,80,0)');
+  x.fillStyle = alone;
+  x.fillRect(0, 0, W, 720);
+
+  // intestazione
+  const storia = fin.history || [];
+  x.textAlign = 'center';
+  x.font = F(800, 62);
+  x.fillStyle = '#e9eef5';
+  x.fillText('\u{1F30D} GeoDuello', W / 2, 108);
+  const quando = new Date().toLocaleDateString('it-IT', { day: 'numeric', month: 'long', year: 'numeric' });
+  x.font = F(500, 29);
+  x.fillStyle = '#8d9bb0';
+  x.fillText(`${quando} · ${storia.length} round`, W / 2, 156);
+
+  const primo = fin.standings[0];
+  const pari = fin.standings.length > 1 && fin.standings[1].score === primo.score;
+  x.font = F(800, 54);
+  x.fillStyle = '#ffd479';
+  x.fillText(pari ? 'Pareggio!' : `Vince ${primo.name}!`, W / 2, 236);
+
+  // classifica
+  const righe = fin.standings.slice(0, 6);
+  const y0 = 288, rh = 76;
+  righe.forEach((s, i) => {
+    const y = y0 + i * rh;
+    const vince = i === 0 && !pari;
+    x.fillStyle = vince ? 'rgba(255,212,121,.10)' : 'rgba(255,255,255,.045)';
+    arrotondato(x, 90, y, W - 180, 62, 14);
+    x.fill();
+    if (vince) {
+      x.strokeStyle = 'rgba(255,212,121,.5)';
+      x.lineWidth = 2;
+      x.stroke();
+    }
+    x.textAlign = 'left';
+    x.font = F(650, 33);
+    x.fillStyle = '#e9eef5';
+    x.fillText(['\u{1F947}', '\u{1F948}', '\u{1F949}'][i] || `${i + 1}.`, 112, y + 43);
+    x.fillText(`${s.avatar || ''} ${s.name}`.trim(), 186, y + 43);
+    x.textAlign = 'right';
+    x.font = F(800, 35);
+    x.fillStyle = vince ? '#ffd479' : '#3fb950';
+    x.fillText(s.score.toLocaleString('it-IT'), W - 112, y + 44);
+  });
+
+  // mappa stilizzata dei round
+  const mx = 90, my = y0 + righe.length * rh + 30;
+  const mw = W - 180, mh = H - my - 170;
+  x.fillStyle = '#10151c';
+  arrotondato(x, mx, my, mw, mh, 18);
+  x.fill();
+  x.strokeStyle = '#2a3340';
+  x.lineWidth = 2;
+  x.stroke();
+
+  const punti = [];
+  storia.forEach((h) => {
+    punti.push([h.truth.lat, h.truth.lng]);
+    (h.results || []).forEach((r) => { if (r.guess) punti.push([r.guess.lat, r.guess.lng]); });
+  });
+
+  let migliore = null;
+  if (punti.length) {
+    let minLat = 90, maxLat = -90, minLng = 180, maxLng = -180;
+    for (const [la, lo] of punti) {
+      minLat = Math.min(minLat, la); maxLat = Math.max(maxLat, la);
+      minLng = Math.min(minLng, lo); maxLng = Math.max(maxLng, lo);
+    }
+    // un po' d'aria, e mai un'area degenere
+    const pl = Math.max((maxLat - minLat) * 0.18, 1.2);
+    const pg = Math.max((maxLng - minLng) * 0.18, 1.2);
+    minLat -= pl; maxLat += pl; minLng -= pg; maxLng += pg;
+    // stessa scala su entrambi gli assi, centrata nel riquadro
+    const scala = Math.min(mw / (maxLng - minLng), mh / (maxLat - minLat));
+    const ox = mx + (mw - (maxLng - minLng) * scala) / 2;
+    const oy = my + (mh - (maxLat - minLat) * scala) / 2;
+    const px = ([la, lo]) => [ox + (lo - minLng) * scala, oy + (maxLat - la) * scala];
+
+    // graticola discreta
+    const passo = (maxLng - minLng) > 90 ? 30 : (maxLng - minLng) > 20 ? 10 : 2;
+    x.save();
+    arrotondato(x, mx, my, mw, mh, 18);
+    x.clip();
+    x.strokeStyle = 'rgba(141,155,176,.12)';
+    x.lineWidth = 1;
+    for (let lo = Math.ceil(minLng / passo) * passo; lo < maxLng; lo += passo) {
+      const [gx] = px([0, lo]);
+      x.beginPath(); x.moveTo(gx, my); x.lineTo(gx, my + mh); x.stroke();
+    }
+    for (let la = Math.ceil(minLat / passo) * passo; la < maxLat; la += passo) {
+      const [, gy] = px([la, 0]);
+      x.beginPath(); x.moveTo(mx, gy); x.lineTo(mx + mw, gy); x.stroke();
+    }
+
+    // tiri: linea tratteggiata dal tiro al punto vero, nel colore del giocatore
+    storia.forEach((h, i) => {
+      const t = px([h.truth.lat, h.truth.lng]);
+      (h.results || []).forEach((r, j) => {
+        if (!r.guess) return;
+        const g = px([r.guess.lat, r.guess.lng]);
+        const col = r.colore || COLORI[j % COLORI.length];
+        x.strokeStyle = col;
+        x.globalAlpha = 0.55;
+        x.lineWidth = 3;
+        x.setLineDash([7, 9]);
+        x.beginPath(); x.moveTo(g[0], g[1]); x.lineTo(t[0], t[1]); x.stroke();
+        x.setLineDash([]);
+        x.globalAlpha = 1;
+        x.fillStyle = col;
+        x.beginPath(); x.arc(g[0], g[1], 7, 0, Math.PI * 2); x.fill();
+        if (!migliore || r.distanceKm < migliore.km) {
+          migliore = { km: r.distanceKm, nome: r.name, round: i + 1, punto: g };
+        }
+      });
+    });
+
+    // punti veri: cerchio dorato numerato
+    storia.forEach((h, i) => {
+      const [tx, ty] = px([h.truth.lat, h.truth.lng]);
+      x.fillStyle = '#ffd479';
+      x.beginPath(); x.arc(tx, ty, 15, 0, Math.PI * 2); x.fill();
+      x.fillStyle = '#06210c';
+      x.textAlign = 'center';
+      x.font = F(800, 20);
+      x.fillText(String(i + 1), tx, ty + 7);
+    });
+
+    if (migliore) {
+      x.strokeStyle = '#ffd479';
+      x.lineWidth = 4;
+      x.beginPath(); x.arc(migliore.punto[0], migliore.punto[1], 24, 0, Math.PI * 2); x.stroke();
+    }
+    x.restore();
+  }
+
+  // piede
+  x.textAlign = 'center';
+  if (migliore) {
+    x.font = F(650, 31);
+    x.fillStyle = '#e9eef5';
+    x.fillText(`\u{1F3AF} Colpo migliore: ${migliore.nome}, ${fmtDist(migliore.km)} al round ${migliore.round}`,
+      W / 2, H - 96);
+  }
+  x.font = F(500, 25);
+  x.fillStyle = '#8d9bb0';
+  x.fillText('La rivincita quando volete.', W / 2, H - 46);
+
+  return c;
+}
+
+function apriFoto() {
+  if (!S.ultimoFinale) return;
+  let c;
+  try { c = disegnaFoto(S.ultimoFinale); } catch (e) {
+    annota('foto: ' + (e && e.message));
+    toast('Non sono riuscito a disegnare la foto.');
+    return;
+  }
+  S.fotoUrl = c.toDataURL('image/png');
+  S.fotoBlob = null;
+  c.toBlob((b) => { S.fotoBlob = b; }, 'image/png');
+  $('foto-img').src = S.fotoUrl;
+  $('foto').hidden = false;
+}
+
+function chiudiFoto() { $('foto').hidden = true; }
+
+$('btn-foto').addEventListener('click', apriFoto);
+$('btn-foto-close').addEventListener('click', chiudiFoto);
+$('foto').addEventListener('click', (e) => { if (e.target === $('foto')) chiudiFoto(); });
+
+$('btn-foto-save').addEventListener('click', () => {
+  if (!S.fotoUrl) return;
+  const a = document.createElement('a');
+  a.href = S.fotoUrl;
+  a.download = `geoduello-${new Date().toISOString().slice(0, 10)}.png`;
+  a.click();
+});
+
+$('btn-foto-share').addEventListener('click', async () => {
+  // Il foglio di condivisione con un file allegato c'e' solo su HTTPS e non
+  // su tutti i browser: dove manca, si ripiega sullo scaricamento.
+  try {
+    if (S.fotoBlob && navigator.canShare) {
+      const file = new File([S.fotoBlob], 'geoduello.png', { type: 'image/png' });
+      if (navigator.canShare({ files: [file] })) {
+        await navigator.share({ files: [file], title: 'GeoDuello' });
+        return;
+      }
+    }
+  } catch (e) {
+    if (e && e.name === 'AbortError') return; // ha chiuso lui il foglio
+  }
+  $('btn-foto-save').click();
+  toast('Qui la condivisione diretta non c’è: la foto è stata scaricata.');
+});
+
+/* ------------------------------------------------------------- coriandoli */
+
+/** Festa per chi vince: leggera, sopra tutto, e si pulisce da sola. */
+function coriandoli() {
+  if (CALMO) return; // chi chiede meno animazioni non vuole nemmeno questa
+  const c = document.createElement('canvas');
+  c.className = 'coriandoli';
+  const dpr = Math.min(devicePixelRatio || 1, 2);
+  c.width = innerWidth * dpr;
+  c.height = innerHeight * dpr;
+  document.body.appendChild(c);
+  const x = c.getContext('2d');
+  const COL = [...COLORI, '#ffd479', '#ffffff'];
+  const pezzi = Array.from({ length: 130 }, () => ({
+    px: Math.random() * c.width,
+    py: -30 * dpr - Math.random() * c.height * 0.35,
+    vx: (Math.random() - 0.5) * 2.4 * dpr,
+    vy: (2.2 + Math.random() * 3.2) * dpr,
+    r: (3 + Math.random() * 4.5) * dpr,
+    a: Math.random() * Math.PI,
+    va: (Math.random() - 0.5) * 0.25,
+    col: COL[Math.floor(Math.random() * COL.length)],
+  }));
+  const inizio = performance.now();
+  (function passo(t) {
+    const vita = (t - inizio) / 2800;
+    if (vita >= 1 || !c.isConnected) { c.remove(); return; }
+    x.clearRect(0, 0, c.width, c.height);
+    x.globalAlpha = Math.min(1, 3 * (1 - vita));
+    for (const p of pezzi) {
+      p.px += p.vx; p.py += p.vy; p.a += p.va;
+      x.save();
+      x.translate(p.px, p.py);
+      x.rotate(p.a);
+      x.fillStyle = p.col;
+      x.fillRect(-p.r, -p.r / 2, p.r * 2, p.r);
+      x.restore();
+    }
+    requestAnimationFrame(passo);
+  })(inizio);
 }
 
 /* ------------------------------------------------------------ albo d'oro */
@@ -1381,6 +1657,11 @@ $('help').addEventListener('click', (e) => { if (e.target === $('help')) chiudiH
  */
 document.addEventListener('keydown', (e) => {
   if (e.target.tagName === 'INPUT') return;
+  if (!$('foto').hidden) {
+    e.stopImmediatePropagation();
+    if (e.key === 'Escape') chiudiFoto();
+    return;
+  }
   if (!$('help').hidden) {
     e.stopImmediatePropagation();
     if (['Escape', '?', 'h', 'H'].includes(e.key)) chiudiHelp();
