@@ -24,6 +24,14 @@ if git ls-files --error-unmatch .env >/dev/null 2>&1; then
 fi
 
 git add -A
+
+# Gli script devono restare eseguibili anche dall'altra parte. Il permesso si
+# perde ogni volta che un file viene riscritto da un editor o copiato da un
+# sistema che non lo conserva, e nel container diventa un "Permission denied":
+# qui lo si riscrive direttamente nell'indice di git, che e' quello che conta.
+git ls-files -z 'deploy/*.sh' 'scripts/*.sh' | xargs -0 -r git update-index --chmod=+x 2>/dev/null || true
+git config core.fileMode false   # e da qui in avanti git ignora i cambi di permesso locali
+
 if git diff --cached --quiet; then
   echo "Nessuna modifica da mandare."
 else

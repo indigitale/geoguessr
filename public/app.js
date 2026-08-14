@@ -1556,6 +1556,9 @@ $('btn-installa').addEventListener('click', async () => {
   try {
     const cfg = await (await fetch('/api/config')).json();
     S.lanUrls = Array.isArray(cfg.lanUrls) ? cfg.lanUrls : [];
+    // L'impronta della versione servita: se dopo un aggiornamento resta
+    // quella di prima, il problema e` la cache del browser, non il server.
+    if (cfg.versione) $('help-versione').textContent = `versione ${cfg.versione}`;
     if (cfg.gated) $('gate-wrap').hidden = false;
     if (!cfg.hasToken) {
       $('home-warn').hidden = false;

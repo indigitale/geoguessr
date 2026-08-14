@@ -24,6 +24,11 @@ else
 fi
 
 git add -A
+# Gli script vanno registrati come eseguibili: nel container si lanciano per
+# nome, e senza questo permesso rispondono "Permission denied".
+git ls-files -z 'deploy/*.sh' 'scripts/*.sh' | xargs -0 -r git update-index --chmod=+x 2>/dev/null || true
+git config core.fileMode false
+
 if git diff --cached --quiet; then
   echo "Nessuna modifica da salvare."
 else

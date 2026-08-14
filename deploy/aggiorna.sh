@@ -54,6 +54,10 @@ if ! cmp -s deploy/geoduello.service /etc/systemd/system/geoduello.service 2>/de
 fi
 
 mkdir -p "$APP_DIR/data"
+# Il permesso di esecuzione si perde con facilita' (basta che un file passi da
+# un sistema che non lo conserva): rimetterlo a ogni giro costa nulla ed evita
+# il "Permission denied" alla prossima volta.
+chmod +x "$APP_DIR"/deploy/*.sh "$APP_DIR"/scripts/*.sh 2>/dev/null || true
 chown -R "$UTENTE:$UTENTE" "$APP_DIR"
 chmod 600 "$APP_DIR/.env" 2>/dev/null || true
 

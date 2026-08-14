@@ -147,8 +147,23 @@ async function main() {
     for (const parola of ['dove stai guardando', 'Aiutino'.toLowerCase(), '30%', 'trenta secondi', 'ricarica']) {
       ok(testoHelp.toLowerCase().includes(parola.toLowerCase()), `l’help spiega "${parola}"`);
     }
+    ok(/versione \w+/.test(await A.textContent('#help-versione')),
+      'in fondo all`help c`e` l`impronta della versione servita');
     await A.click('#btn-help-ok');
     ok(await A.isHidden('#help'), 'si chiude con il pulsante');
+
+    // La cache del browser non deve mai servire codice vecchio dopo un
+    // aggiornamento: il codice si rivalida sempre, le librerie no.
+    const intestazioni = await A.evaluate(async () => {
+      const leggi = async (p) => {
+        const r = await fetch(p, { cache: 'no-store' });
+        return { cc: r.headers.get('cache-control'), et: r.headers.get('etag') };
+      };
+      return { app: await leggi('app.js'), lib: await leggi('vendor/leaflet/leaflet.css') };
+    });
+    ok(intestazioni.app.cc === 'no-cache', 'app.js si rivalida a ogni caricamento');
+    ok(!!intestazioni.app.et, 'ma con ETag: se non e` cambiato, non si riscarica');
+    ok(/max-age=\d{5,}/.test(intestazioni.lib.cc || ''), 'le librerie restano in cache a lungo');
 
     // --------------------------------------- il secondo entra dal link
     await B.goto(linkLocale, { waitUntil: 'domcontentloaded' });

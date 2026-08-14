@@ -736,6 +736,8 @@ a.vaia:hover { text-decoration: underline; }
 .help-card b { color: var(--txt); }
 .help-piccolo { font-size: 13px !important; color: var(--dim) !important; }
 
+.help-ver { margin: 12px 0 0 !important; text-align: center; font-size: 11.5px !important; opacity: .7; }
+
 .help-intro {
   padding: 11px 13px;
   background: rgba(63, 185, 80, .1);

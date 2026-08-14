@@ -199,6 +199,12 @@ grafica 3D. Si perde il camminare, ma il round si gioca. Se non parte nemmeno
 quella, compare un riquadro con gli errori veri del browser e un pulsante per
 copiarli.
 
+**Ho aggiornato ma vedo ancora la versione vecchia.** In fondo al pannello
+"Come si gioca" c'è l'impronta della versione servita: se dopo un aggiornamento
+è cambiata, il server è a posto e il problema era la pagina aperta da prima; se
+è rimasta identica, l'aggiornamento non è arrivato al server. Il codice del
+gioco si rivalida a ogni caricamento, quindi basta ricaricare la pagina.
+
 **Diagnostica.** Sul dispositivo che fa i capricci apri
 `http://INDIRIZZO:3000/diagnostica.html`: in dieci secondi prova la grafica 3D,
 il collegamento a Mapillary, il download di una foto vera e il collegamento al

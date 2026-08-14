@@ -287,6 +287,24 @@ lì funziona, il colpevole è il proxy.
 
 **"Connessione persa" ogni minuto.** È il `proxy_read_timeout` troppo basso.
 
+**Ho aggiornato ma il gioco è quello di prima.** Prima di tutto controlla che
+l'aggiornamento sia davvero arrivato:
+
+```bash
+cd /opt/geoduello && git log --oneline -1
+```
+
+Se il commit in cima non è quello che hai appena pubblicato, il problema è qui,
+non nel browser: rilancia `bash deploy/aggiorna.sh` e leggi cosa stampa. Se
+invece il commit è giusto, apri il pannello "Come si gioca" nel gioco: in fondo
+c'è l'impronta della versione servita, e se cambia dopo un ricaricamento sei a
+posto.
+
+**`aggiorna.sh: Permission denied`.** Manca il permesso di esecuzione: il file
+è arrivato da git senza. Si risolve lanciandolo con `bash` davanti —
+`bash /opt/geoduello/deploy/aggiorna.sh` — e da quell'aggiornamento in poi lo
+script rimette il permesso da solo, a sé e agli altri.
+
 **Il servizio non parte.** `journalctl -u geoduello -n 40 --no-pager`. Quasi
 sempre è il `.env` mancante o il token sbagliato — il messaggio all'avvio te lo
 dice esplicitamente.

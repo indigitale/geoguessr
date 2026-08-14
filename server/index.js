@@ -1,4 +1,5 @@
 import http from 'node:http';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -99,6 +100,35 @@ const MIME = {
   '.webp': 'image/webp',
 };
 
+/**
+ * Impronta della versione dell'interfaccia. Serve a una cosa sola ma
+ * importante: poter rispondere a "ho aggiornato ma vedo ancora la versione
+ * vecchia" guardando un numero invece che tirando a indovinare. Si vede in
+ * fondo al pannello "Come si gioca".
+ */
+const VERSIONE = (() => {
+  try {
+    const h = crypto.createHash('sha1');
+    for (const f of ['app.js', 'index.html', 'style.css']) {
+      h.update(fs.readFileSync(path.join(PUBLIC_DIR, f)));
+    }
+    return h.digest('hex').slice(0, 7);
+  } catch { return 'sconosciuta'; }
+})();
+
+/**
+ * La cache dei browser e' la trappola classica di un gioco senza build step:
+ * si aggiorna il server e i giocatori continuano a vedere il codice vecchio,
+ * senza capire perche'. Qui il codice dell'applicazione si rivalida sempre
+ * (con ETag: se non e' cambiato niente la risposta e' un 304 vuoto), mentre
+ * le librerie di terze parti, che cambiano una volta l'anno, restano in cache
+ * a lungo.
+ */
+function politicaCache(rel) {
+  if (/^\/(vendor|icone)\//.test(rel)) return 'public, max-age=604800';
+  return 'no-cache';
+}
+
 function serveStatic(req, res) {
   const url = new URL(req.url, 'http://localhost');
   let rel = decodeURIComponent(url.pathname);
@@ -119,11 +149,15 @@ function serveStatic(req, res) {
       return;
     }
     const type = MIME[path.extname(filePath).toLowerCase()] || 'application/octet-stream';
+    const etag = '"' + crypto.createHash('sha1').update(buf).digest('hex').slice(0, 16) + '"';
+    if (req.headers['if-none-match'] === etag) {
+      res.writeHead(304, { etag, 'cache-control': politicaCache(rel) }).end();
+      return;
+    }
     res.writeHead(200, {
       'content-type': type,
-      'cache-control': (rel === '/index.html' || rel === '/sw.js')
-        ? 'no-cache'
-        : 'public, max-age=300',
+      etag,
+      'cache-control': politicaCache(rel),
     }).end(buf);
   });
 }
@@ -189,6 +223,7 @@ const server = http.createServer((req, res) => {
       JSON.stringify({
         hasToken: !!TOKEN || FAKE,
         fake: FAKE,
+        versione: VERSIONE,
         lanUrls: lanUrls(),
         gated: !!GATE_CODE,
         scopes: SCOPE_VALUES,
