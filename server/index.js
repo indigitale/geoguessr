@@ -361,6 +361,14 @@ wss.on('connection', (ws) => {
           if (!room) return fail(ws, 'Non sei in una stanza.');
           return game.backToLobby(room, playerId);
 
+        // Uscita esplicita col pulsante: diversa dal collegamento che cade,
+        // perche' qui la volonta' e' chiara e non serve nessuna finestra di
+        // grazia. Il socket verra' chiuso dal client subito dopo.
+        case 'leave':
+          if (room && playerId) game.leaveRoom(room, playerId);
+          ws.ctx = { room: null, playerId: null };
+          return;
+
         default:
           return fail(ws, `Comando sconosciuto: ${msg.type}`);
       }

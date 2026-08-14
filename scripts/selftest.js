@@ -282,6 +282,48 @@ async function graziaTest() {
 }
 
 /** La partita deve reggere anche in tre o quattro. */
+async function lobbyAttesaTest() {
+  console.log('\nLobby che sopravvive a chi va a mandare l`invito');
+  const provider = async () => ({
+    imageId: 'x', lat: 45, lng: 9, isPano: true, area: { name: 'Test', country: 'Italia' },
+  });
+  const g = new GameServer({ token: 'x', provider, conAlbo: false, lobbyGrazia: 300 });
+  const { room, player: papa } = g.createRoom({ name: 'Papa', scope: 'italia', rounds: 1, timer: 0 });
+  const code = room.code;
+
+  // passa a WhatsApp per mandare il link: il telefono chiude il collegamento.
+  // PRIMA la stanza veniva cancellata all`istante, e al ritorno "non esiste".
+  g.disconnect(room, papa.id);
+  ok(g.rooms.has(code), 'la stanza sopravvive anche se resta senza nessuno collegato');
+  ok(room.players.has(papa.id), 'chi e` sparito resta socio, segnato scollegato');
+  ok(room.hostId === papa.id, 'e non perde il posto di host per una sparizione momentanea');
+
+  // torna dopo qualche secondo
+  const tornato = g.addPlayer(room, { name: 'Papa', playerId: papa.id });
+  ok(tornato.id === papa.id && tornato.connected && room.hostId === papa.id,
+    'al ritorno e` di nuovo lui, ed e` ancora host');
+
+  // nel frattempo il figlio puo` entrare anche mentre l`host e` via
+  g.disconnect(room, papa.id);
+  const figlio = g.addPlayer(room, { name: 'Figlio' });
+  ok(room.players.has(figlio.id) && g.rooms.has(code),
+    'si puo` entrare dal link anche mentre chi ha creato e` su WhatsApp');
+  g.leaveRoom(room, figlio.id);
+
+  // se invece non torna piu`, a finestra scaduta la stanza si pulisce davvero
+  await sleep(700);
+  ok(!g.rooms.has(code), 'chi non torna piu` non lascia stanze fantasma in giro');
+
+  // l`uscita col pulsante e` un`altra cosa: esplicita, quindi immediata
+  const { room: r2, player: a } = g.createRoom({ name: 'A', scope: 'italia', rounds: 1, timer: 0 });
+  const b = g.addPlayer(r2, { name: 'B' });
+  g.leaveRoom(r2, a.id);
+  ok(!r2.players.has(a.id), 'chi esce col pulsante viene tolto subito');
+  ok(r2.hostId === b.id, 'e il posto di host passa a chi resta');
+  g.leaveRoom(r2, b.id);
+  ok(!g.rooms.has(r2.code), 'l`ultimo che esce spegne la luce: stanza rimossa');
+}
+
 async function tantiTest() {
   console.log('\nPartita in quattro');
   const provider = async () => ({
@@ -465,6 +507,7 @@ async function main() {
   await sprintTest();
   await alboTest();
   await graziaTest();
+  await lobbyAttesaTest();
   await tantiTest();
   await equilibrioTest();
   await arcoTest();

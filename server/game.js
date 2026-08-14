@@ -53,10 +53,15 @@ function clean(name) {
 
 export class GameServer {
   // provider e' iniettabile: in produzione e' Mapillary, nei test e' finto.
-  constructor({ token, provider = pickLocation, conAlbo = true, gate = '' }) {
+  constructor({ token, provider = pickLocation, conAlbo = true, gate = '',
+                lobbyGrazia = Number(process.env.LOBBY_GRAZIA_MS || 300_000) }) {
     this.token = token;
     this.provider = provider;
     this.conAlbo = conAlbo; // i test non devono sporcare l'albo vero
+    // Quanto a lungo la lobby aspetta chi ha perso il collegamento prima di
+    // toglierlo davvero. Cinque minuti: il tempo di passare a WhatsApp,
+    // mandare il link, rispondere a un messaggio e tornare.
+    this.lobbyGrazia = lobbyGrazia;
     // La parola d'ordine viaggia anche nello stato della stanza: la ricevono
     // solo i giocatori che l'hanno gia' superata, e serve al client per
     // costruire link e QR d'invito senza dipendere da cosa si ricorda —
@@ -611,17 +616,25 @@ export class GameServer {
     p.disconnectedAt = Date.now();
     p.ws = null;
 
+    /*
+     * IN LOBBY NON SI CANCELLA NESSUNO. Il caso tipico e' chi crea la stanza
+     * e passa a WhatsApp per mandare l'invito: il telefono gli chiude il
+     * collegamento dopo pochi secondi, e prima questa funzione lo rimuoveva
+     * subito — stanza vuota, stanza cancellata, e al ritorno "la stanza non
+     * esiste". Ora si resta soci per qualche minuto anche da scollegati; la
+     * rimozione vera avviene solo a finestra scaduta, o con l'uscita
+     * esplicita dal pulsante (leaveRoom). Nemmeno il ruolo di host si
+     * trasferisce per una sparizione momentanea.
+     */
     if (room.phase === 'lobby') {
-      room.players.delete(playerId);
+      this.programmaPulizia(room);
+      this.sync(room);
+      return;
     }
+
     if (room.hostId === playerId) {
       const next = [...room.players.values()].find((x) => x.connected);
-      room.hostId = next ? next.id : (room.players.keys().next().value ?? null);
-    }
-    if (room.players.size === 0) {
-      this.clearTimer(room);
-      this.rooms.delete(room.code);
-      return;
+      if (next) room.hostId = next.id;
     }
     this.sync(room);
 
@@ -634,5 +647,57 @@ export class GameServer {
       this.sync(room);
     }, GRAZIA_MS + 500);
     room.graziaHandle.unref?.();
+  }
+
+  programmaPulizia(room) {
+    clearTimeout(room.puliziaHandle);
+    room.puliziaHandle = setTimeout(() => this.pulisciLobby(room), this.lobbyGrazia + 200);
+    room.puliziaHandle.unref?.();
+  }
+
+  /** A finestra scaduta: via chi non e' tornato, e la stanza solo se vuota. */
+  pulisciLobby(room) {
+    if (this.rooms.get(room.code) !== room) return;
+    if (room.phase !== 'lobby') return; // a partita in corso decide la logica dei round
+    const ora = Date.now();
+    for (const [id, p] of [...room.players]) {
+      if (!p.connected && p.disconnectedAt && ora - p.disconnectedAt >= this.lobbyGrazia) {
+        room.players.delete(id);
+      }
+    }
+    if (room.players.size === 0) {
+      this.clearTimer(room);
+      this.rooms.delete(room.code);
+      return;
+    }
+    if (!room.players.has(room.hostId)) {
+      const next = [...room.players.values()].find((x) => x.connected)
+        || room.players.values().next().value;
+      room.hostId = next.id;
+    }
+    // qualcuno e' ancora scollegato ma dentro la finestra: si ricontrolla
+    if ([...room.players.values()].some((x) => !x.connected)) this.programmaPulizia(room);
+    this.sync(room);
+  }
+
+  /** Uscita esplicita col pulsante: qui si` che si toglie subito. */
+  leaveRoom(room, playerId) {
+    if (!room.players.has(playerId)) return;
+    room.players.delete(playerId);
+    if (room.players.size === 0) {
+      this.clearTimer(room);
+      clearTimeout(room.puliziaHandle);
+      clearTimeout(room.graziaHandle);
+      this.rooms.delete(room.code);
+      return;
+    }
+    if (room.hostId === playerId) {
+      const next = [...room.players.values()].find((x) => x.connected)
+        || room.players.values().next().value;
+      room.hostId = next.id;
+    }
+    this.sync(room);
+    // se se ne va a round in corso, gli altri non devono aspettarlo
+    if (room.phase === 'playing') this.maybeReveal(room);
   }
 }

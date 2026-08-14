@@ -75,6 +75,10 @@ All'avvio il server stampa da solo dove trovarlo:
 
 **Apri il gioco dall'indirizzo wifi**, non da `localhost`: la lobby mostrerà un
 QR che gli altri inquadrano con la fotocamera, entrando senza digitare niente.
+E si può passare tranquillamente a WhatsApp per mandare il link: la stanza
+aspetta chi sparisce dalla lobby per cinque minuti, e al ritorno ci si
+ritrova al proprio posto. Solo il pulsante "Esci dalla stanza" fa uscire
+davvero.
 Se apri comunque `localhost`, il link d'invito e il QR usano automaticamente
 l'indirizzo di rete, perché `localhost` sul telefono non porterebbe da nessuna
 parte.

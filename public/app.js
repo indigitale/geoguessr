@@ -153,6 +153,22 @@ function send(msg) {
 
 setInterval(() => send({ type: 'ping' }), 25000);
 
+/**
+ * Tornando da WhatsApp (o da qualunque altra app) il telefono ha quasi sempre
+ * gia' chiuso il canale. Appena la pagina torna visibile ci si ricollega
+ * SUBITO, senza aspettare i tentativi a distanza crescente: la stanza dal
+ * canto suo aspetta chi sparisce dalla lobby per qualche minuto.
+ */
+function riaggancia() {
+  if (document.visibilityState !== 'visible') return;
+  if (!S.code || S.screen === 'screen-home') return;
+  if (S.ws && (S.ws.readyState === 0 || S.ws.readyState === 1)) return;
+  S.reconnectDelay = 800;
+  connect(() => send({ type: 'join', code: S.code, name: S.name, playerId: S.playerId, gate: S.gate }));
+}
+document.addEventListener('visibilitychange', riaggancia);
+window.addEventListener('pageshow', riaggancia);
+
 /* ---------------------------------------------------------- messaggi in */
 
 function handle(msg) {
@@ -1531,6 +1547,10 @@ $('btn-next').addEventListener('click', () => send({ type: 'next' }));
 $('btn-again').addEventListener('click', () => send({ type: 'lobby' }));
 
 function leave() {
+  // L'uscita col pulsante e' esplicita: lo si dice al server, che toglie
+  // subito dalla stanza. Un collegamento che cade e basta, invece, viene
+  // aspettato: e' la differenza fra "esco" e "torno tra un attimo".
+  send({ type: 'leave' });
   S.wantOpen = false;
   if (S.ws) S.ws.close();
   S.ws = null; S.room = null; S.code = null;
