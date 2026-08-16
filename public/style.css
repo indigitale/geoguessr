@@ -955,6 +955,13 @@ a.vaia:hover { text-decoration: underline; }
   .hud-pill { min-height: 34px; padding: 6px 9px; font-size: 12.5px; }
   .iconbtn { width: 44px; height: 44px; font-size: 17px; }
 
+  /* Il controllo Sequenza e` il Play nativo di Mapillary. Lo si tiene sotto
+     la barra del gioco, invece che sopra timer e Aiutino come da posizione
+     predefinita della libreria. */
+  #pano .mapillary-sequence-container {
+    top: calc(max(12px, env(safe-area-inset-top)) + 84px);
+  }
+
   /* L'avviso a scomparsa stava sopra i pulsanti della mappa. */
   .toast { bottom: auto; top: 30%; max-width: calc(100vw - 40px); }
   .roomcode { font-size: 44px; }

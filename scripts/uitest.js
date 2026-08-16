@@ -343,25 +343,54 @@ async function main() {
         const destra = rett('.hud-right');
         const nav = rett('.navpad');
         const guess = rett('#guessbox');
+        // Il test usa immagini finte, quindi Mapillary puo` non disegnare il
+        // controllo. Una sonda con la sua stessa classe verifica comunque la
+        // posizione CSS che avra` il Play con una sequenza reale.
+        const sonda = document.createElement('div');
+        sonda.className = 'mapillary-sequence-container';
+        document.getElementById('pano').appendChild(sonda);
+        const playTop = parseFloat(getComputedStyle(sonda).top);
+        sonda.remove();
         return {
           overflow: document.documentElement.scrollWidth > innerWidth + 1,
           piccoli: visibili.some((r) => r.width < 44 || r.height < 44),
           hudSovrapposto: !!(hud && destra && hud.right > destra.left + 1),
           navSovrapposta: !!(nav && guess && nav.bottom >= guess.top),
           guessH: guess?.height || 999,
+          playTop,
         };
       });
-      ok(!layout.overflow && !layout.piccoli && !layout.hudSovrapposto && !layout.navSovrapposta && layout.guessH <= 136,
+      ok(!layout.overflow && !layout.piccoli && !layout.hudSovrapposto &&
+        !layout.navSovrapposta && layout.guessH <= 136 && layout.playTop >= 94,
         `layout mobile ${viewport.width}x${viewport.height}: compatto, separato e toccabile`);
     }
     await B.setViewportSize({ width: 390, height: 844 });
 
     // ------------------------------------------------------------------
-    // Movimento nel panorama. Ogni gesto deve produrre UNA sola richiesta
-    // Mapillary: accodare moveTo, Step e Next faceva avanzare di piu` foto o
-    // partire nella direzione opposta su una rete mobile lenta.
+    // Movimento nel panorama. Un secondo tocco mentre il primo e` ancora in
+    // corso non deve accodare un altro passo.
     // ------------------------------------------------------------------
     ok(await A.evaluate(() => typeof S === 'object'), 'lo stato del gioco e` ispezionabile');
+    const configVisore = await A.evaluate(() => {
+      let ricevuta = null;
+      const ViewerOriginale = mapillary.Viewer;
+      mapillary.Viewer = class {
+        constructor(opzioni) { ricevuta = opzioni; }
+        on() {}
+        off() {}
+        remove() {}
+        getImage() { return Promise.resolve({ id: 'prova' }); }
+      };
+      try {
+        ensureViewer('token-di-prova', 'foto-di-prova');
+        clearTimeout(S.panoWatch);
+      } finally {
+        mapillary.Viewer = ViewerOriginale;
+      }
+      return ricevuta?.component || null;
+    });
+    ok(configVisore?.sequence === true && configVisore?.direction === false,
+      'il controllo Sequenza con il tasto Play e` attivo, senza doppie frecce native');
 
     await A.evaluate(() => {
       window.__mosse = [];
@@ -391,14 +420,55 @@ async function main() {
     ok(await A.isEnabled('#btn-fwd') && await A.isEnabled('#btn-back'),
       'finito il passo, entrambi i comandi tornano disponibili');
 
-    // Avanti e indietro usano le direzioni pubbliche che Mapillary calcola
-    // rispetto allo sguardo corrente, senza teletrasporti manuali.
+    // La foto puo` essere gia` visibile mentre il navigatore Mapillary si sta
+    // ancora preparando: in quel breve intervallo non va dichiarata una falsa
+    // fine strada.
     await A.evaluate(() => {
+      window.__mosse = [];
+      window.__navigabile = false;
+      window.__navHandlers = {};
+      S.moveActive = null; S.ultimaMossa = 0;
+      S.moveGen = (S.moveGen || 0) + 1;
+      S.viewer = {
+        get isNavigable() { return window.__navigabile; },
+        getImage: () => Promise.resolve({
+          spatialEdges: { cached: true, edges: [] },
+          sequenceEdges: { cached: true, edges: [] },
+        }),
+        moveDir: (d) => { window.__mosse.push(d); return Promise.resolve(); },
+        on: (nome, fn) => { window.__navHandlers[nome] = fn; },
+        off: () => {},
+      };
+    });
+    const inPreparazione = A.evaluate(() => panoMove(true));
+    await A.waitForFunction(() => !!window.__navHandlers.navigable, null, { timeout: 3000 });
+    ok(await A.evaluate(() => window.__mosse.length) === 0,
+      'se il navigatore non e` pronto, il tocco aspetta senza dare un falso errore');
+    await A.evaluate(() => {
+      window.__navigabile = true;
+      window.__navHandlers.navigable({ navigable: true });
+    });
+    await inPreparazione;
+    ok(await A.evaluate(() => window.__mosse.length) === 1,
+      'appena Mapillary e` navigabile, il passo parte normalmente');
+
+    // Con gli azimut disponibili si sceglie la strada che punta davvero verso
+    // lo sguardo (o dalla parte opposta per Indietro).
+    await A.evaluate(() => {
+      window.__target = [];
       window.__dir = [];
       S.moveActive = null; S.ultimaMossa = 0;
       S.moveGen = (S.moveGen || 0) + 1;
       S.viewer = {
-        getImage: () => Promise.resolve({ spatialEdges: { cached: true } }),
+        getImage: () => Promise.resolve({
+          spatialEdges: { cached: true, edges: [
+            { target: 'nord', data: { worldMotionAzimuth: Math.PI / 2 } },
+            { target: 'sud', data: { worldMotionAzimuth: -Math.PI / 2 } },
+          ] },
+          sequenceEdges: { cached: true, edges: [] },
+        }),
+        getBearing: () => Promise.resolve(0),
+        moveTo: (id) => { window.__target.push(id); return Promise.resolve(); },
         moveDir: (d) => { window.__dir.push(d); return Promise.resolve(); },
         on: () => {}, off: () => {},
       };
@@ -408,36 +478,75 @@ async function main() {
     await A.evaluate(() => { S.ultimaMossa = 0; });
     await A.click('#btn-back');
     await A.waitForSelector('#btn-back:not(.moving)', { timeout: 5000 });
-    const direzioni = await A.evaluate(() => ({
-      viste: window.__dir,
-      avanti: mapillary.NavigationDirection.StepForward,
-      indietro: mapillary.NavigationDirection.StepBackward,
-    }));
-    ok(direzioni.viste.length === 2 && direzioni.viste[0] === direzioni.avanti && direzioni.viste[1] === direzioni.indietro,
-      'avanti e indietro rispettano lo sguardo tramite StepForward/StepBackward');
+    const bersagli = await A.evaluate(() => ({ target: window.__target, dir: window.__dir }));
+    ok(bersagli.target.length === 2 && bersagli.target[0] === 'nord' &&
+      bersagli.target[1] === 'sud' && bersagli.dir.length === 0,
+    'avanti e indietro scelgono il collegamento geografico coerente con lo sguardo');
 
-    // Collegamenti non ancora in cache: aspetta il relativo evento e parte
-    // una volta sola, senza provare Next/Prev come seconda mossa.
+    // Se il collegamento scelto non e` raggiungibile, Step e poi Next/Prev
+    // sono fallback sequenziali. Si ferma appena uno riesce.
     await A.evaluate(() => {
-      window.__mosse = [];
-      window.__edgeHandlers = {};
-      S.moveActive = null; S.ultimaMossa = 0; S.edgePronti = false;
+      window.__tentativi = [];
+      S.moveActive = null; S.ultimaMossa = 0;
       S.moveGen = (S.moveGen || 0) + 1;
       S.viewer = {
-        getImage: () => Promise.resolve({ id: 'x', spatialEdges: { cached: false }, sequenceEdges: { cached: false } }),
-        moveDir: (d) => { window.__mosse.push(d); return Promise.reject(new Error('niente')); },
-        on: (nome, fn) => { window.__edgeHandlers[nome] = fn; },
+        getImage: () => Promise.resolve({
+          spatialEdges: { cached: true, edges: [
+            { target: 'davanti', data: { worldMotionAzimuth: Math.PI / 2 } },
+          ] },
+          sequenceEdges: { cached: true, edges: [] },
+        }),
+        getBearing: () => Promise.resolve(0),
+        moveTo: (id) => {
+          window.__tentativi.push(['to', id]);
+          return Promise.reject(new Error('foto non raggiungibile'));
+        },
+        moveDir: (d) => {
+          window.__tentativi.push(['dir', d]);
+          return d === mapillary.NavigationDirection.StepForward
+            ? Promise.reject(new Error('step non disponibile'))
+            : Promise.resolve();
+        },
+        on: () => {},
         off: () => {},
       };
     });
-    const movimento = A.evaluate(() => panoMove(false));
-    await A.waitForFunction(() => !!window.__edgeHandlers.spatialedges, null, { timeout: 3000 });
-    await A.evaluate(() => window.__edgeHandlers.spatialedges());
-    await movimento;
+    await A.evaluate(() => panoMove(true));
+    const fallback = await A.evaluate(() => ({
+      tentativi: window.__tentativi,
+      step: mapillary.NavigationDirection.StepForward,
+      next: mapillary.NavigationDirection.Next,
+    }));
+    ok(fallback.tentativi.length === 3 && fallback.tentativi[0][0] === 'to' &&
+      fallback.tentativi[1][1] === fallback.step && fallback.tentativi[2][1] === fallback.next,
+    'se serve prova nell`ordine collegamento, Step e sequenza, fermandosi al successo');
+
+    // Solo quando nessuno dei due fallback esiste si puo` parlare davvero di
+    // fine strada.
+    await A.evaluate(() => {
+      window.__mosse = [];
+      S.moveActive = null; S.ultimaMossa = 0;
+      S.moveGen = (S.moveGen || 0) + 1;
+      S.viewer = {
+        getImage: () => Promise.resolve({
+          spatialEdges: { cached: true, edges: [] },
+          sequenceEdges: { cached: true, edges: [] },
+        }),
+        getBearing: () => Promise.resolve(0),
+        moveDir: (d) => { window.__mosse.push(d); return Promise.reject(new Error('niente')); },
+        on: () => {}, off: () => {},
+      };
+    });
+    await A.evaluate(() => panoMove(false));
     await A.waitForSelector('#toast:not([hidden])', { timeout: 5000 });
     ok((await A.textContent('#toast')).length > 5, 'quando la strada finisce lo dice invece di non fare nulla');
-    ok(await A.evaluate(() => window.__mosse.length) === 1,
-      'anche quando la strada finisce non accumula richieste di riserva');
+    const fine = await A.evaluate(() => ({
+      mosse: window.__mosse,
+      step: mapillary.NavigationDirection.StepBackward,
+      prev: mapillary.NavigationDirection.Prev,
+    }));
+    ok(fine.mosse.length === 2 && fine.mosse[0] === fine.step && fine.mosse[1] === fine.prev,
+      'dichiara la fine solo dopo aver provato entrambi i movimenti disponibili');
     // ------------------------------------------------------------------
     // Uscire dallo zoom. Restarci incastrati rende il gioco ingiocabile:
     // i comandi di zoom di MapillaryJS finiscono sotto la mappa sul telefono.

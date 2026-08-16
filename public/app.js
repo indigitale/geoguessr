@@ -692,12 +692,13 @@ function ensureViewer(token, imageId) {
       container: 'pano',
       imageId,
       imageTiling: true, // tessere ad alta risoluzione quando si zooma
-      // L'interfaccia usa comandi propri, grandi e raggiungibili col pollice.
-      // Quelli nativi duplicavano frecce e zoom sopra HUD e minimappa.
+      // L'interfaccia usa frecce e zoom propri, grandi e raggiungibili col
+      // pollice. Il controllo Sequenza resta invece attivo: contiene il Play
+      // nativo di Mapillary per avanzare automaticamente lungo il percorso.
       component: {
         cover: false,
         direction: false,
-        sequence: false,
+        sequence: true,
         zoom: false,
         bearing: false,
         keyboard: false,
@@ -762,7 +763,7 @@ function mostraGuasto(titolo) {
 /* ------------------------------------------------- spostarsi nel panorama */
 
 const MOVE_TIMEOUT_MS = 5000;
-const EDGE_WAIT_MS = 900;
+const EDGE_WAIT_MS = 1200;
 
 function conScadenza(promessa, ms) {
   let timer;
@@ -778,37 +779,128 @@ function conScadenza(promessa, ms) {
   ]).finally(() => clearTimeout(timer));
 }
 
-/** Aspetta che Mapillary abbia caricato le strade collegate alla foto. */
-async function attendiCollegamenti(viewer) {
-  try {
-    const img = await Promise.resolve(viewer.getImage());
-    if (img?.spatialEdges?.cached || img?.sequenceEdges?.cached || S.edgePronti) return;
-  } catch { /* gli eventi sotto restano la rete di sicurezza */ }
+/** Tutti i collegamenti disponibili dall'immagine corrente, senza doppioni. */
+function collegamenti(img) {
+  const tutti = [
+    ...(img?.spatialEdges?.edges || []),
+    ...(img?.sequenceEdges?.edges || []),
+  ];
+  const visti = new Set();
+  return tutti.filter((edge) => {
+    if (!edge?.target || visti.has(edge.target)) return false;
+    visti.add(edge.target);
+    return true;
+  });
+}
 
-  await new Promise((risolvi) => {
+/**
+ * Mapillary espone la direzione geografica di ogni collegamento in radianti,
+ * in senso antiorario da Est. Il visore usa invece gradi orari da Nord.
+ */
+function rottaDellEdge(edge) {
+  const azimut = edge?.data?.worldMotionAzimuth;
+  if (!Number.isFinite(azimut)) return null;
+  return (90 - (azimut * 180) / Math.PI + 360) % 360;
+}
+
+/** Differenza fra due rotte, sempre compresa fra 0 e 180 gradi. */
+function scartoRotte(a, b) {
+  return Math.abs(((a - b + 540) % 360) - 180);
+}
+
+// Una strada entro questo cono e` coerente con il verso richiesto. Il valore
+// ampio gestisce incroci e foto la cui bussola non e` perfettamente calibrata.
+const APERTURA_MOVIMENTO = 100;
+
+/** Sceglie il collegamento piu` vicino alla direzione in cui si sta guardando. */
+async function bersaglioMovimento(forward, viewer, img) {
+  let bussola;
+  try {
+    bussola = await Promise.resolve(viewer.getBearing());
+  } catch {
+    return null;
+  }
+  if (!Number.isFinite(bussola)) return null;
+
+  const voluta = forward ? bussola : (bussola + 180) % 360;
+  let migliore = null;
+  let minimo = Infinity;
+  for (const edge of collegamenti(img)) {
+    const rotta = rottaDellEdge(edge);
+    if (rotta === null) continue;
+    const distanza = scartoRotte(rotta, voluta);
+    if (distanza < minimo) {
+      minimo = distanza;
+      migliore = edge.target;
+    }
+  }
+  return minimo <= APERTURA_MOVIMENTO ? migliore : null;
+}
+
+/** Aspetta che il visore accetti la navigazione, non solo che mostri la foto. */
+async function attendiNavigabile(viewer) {
+  if (viewer.isNavigable !== false) return true;
+  return new Promise((risolvi) => {
     let finita = false;
-    const pronto = () => {
+    const chiudi = (pronto) => {
       if (finita) return;
       finita = true;
       clearTimeout(timer);
-      try { viewer.off?.('spatialedges', pronto); viewer.off?.('sequenceedges', pronto); } catch { /* niente */ }
-      risolvi();
+      try { viewer.off?.('navigable', evento); } catch { /* niente */ }
+      risolvi(pronto);
     };
-    const timer = setTimeout(pronto, EDGE_WAIT_MS);
-    try {
-      viewer.on('spatialedges', pronto);
-      viewer.on('sequenceedges', pronto);
-    } catch { pronto(); }
+    const evento = (e) => {
+      if (e?.navigable !== false) chiudi(true);
+    };
+    const timer = setTimeout(() => chiudi(viewer.isNavigable !== false), EDGE_WAIT_MS);
+    try { viewer.on('navigable', evento); } catch { chiudi(true); }
   });
+}
+
+/** Aspetta che Mapillary abbia caricato le strade collegate alla foto. */
+async function attendiCollegamenti(viewer) {
+  if (!await attendiNavigabile(viewer)) {
+    const e = new Error('visore non ancora navigabile');
+    e.code = 'MOVE_NOT_READY';
+    throw e;
+  }
+  const scadenza = Date.now() + EDGE_WAIT_MS;
+  let img = null;
+  do {
+    try {
+      img = await Promise.resolve(viewer.getImage());
+      const almenoUnaStrada = collegamenti(img).length > 0;
+      const cacheComplete = img?.spatialEdges?.cached === true &&
+        img?.sequenceEdges?.cached === true;
+      if (almenoUnaStrada || cacheComplete) return img;
+    } catch { /* il breve tentativo successivo puo` ancora riuscire */ }
+    await new Promise((risolvi) => setTimeout(risolvi, 70));
+  } while (Date.now() < scadenza);
+  const e = new Error('collegamenti non ancora caricati');
+  e.code = 'MOVE_NOT_READY';
+  throw e;
+}
+
+/**
+ * Prova una mossa. Si passa al fallback solo dopo un rifiuto definitivo; se
+ * Mapillary e` semplicemente lento non si avvia una seconda mossa concorrente.
+ */
+async function provaMovimento(esegui) {
+  try {
+    await conScadenza(Promise.resolve().then(esegui), MOVE_TIMEOUT_MS);
+    return true;
+  } catch (e) {
+    if (e?.code === 'MOVE_TIMEOUT') throw e;
+    return false;
+  }
 }
 
 /**
  * Un passo nella direzione in cui stai guardando.
  *
- * Si invia una sola richiesta per gesto. StepForward/StepBackward sono le
- * direzioni pubbliche di Mapillary che rispettano l'inquadratura corrente;
- * concatenare moveTo, Step e Next faceva partire movimenti contrari e lasciava
- * vecchie promesse libere di sbloccare una mossa piu` recente.
+ * Prima si usa il collegamento geografico piu` coerente con lo sguardo. Per le
+ * vecchie foto senza azimut si prova Step e infine la sequenza Next/Prev. I
+ * fallback partono solo se il tentativo precedente e` gia` terminato.
  */
 async function panoMove(forward) {
   if (!S.viewer || !window.mapillary || !mapillary.NavigationDirection) return;
@@ -829,14 +921,32 @@ async function panoMove(forward) {
 
   try {
     const viewer = S.viewer;
-    await attendiCollegamenti(viewer);
+    const img = await attendiCollegamenti(viewer);
     if (gen !== (S.moveGen || 0)) return;
-    await conScadenza(viewer.moveDir(forward ? D.StepForward : D.StepBackward), MOVE_TIMEOUT_MS);
+
+    const dove = await bersaglioMovimento(forward, viewer, img);
+    if (gen !== (S.moveGen || 0)) return;
+    if (dove && await provaMovimento(() => viewer.moveTo(dove))) return;
+
+    for (const direzione of [
+      forward ? D.StepForward : D.StepBackward,
+      forward ? D.Next : D.Prev,
+    ]) {
+      if (gen !== (S.moveGen || 0)) return;
+      if (await provaMovimento(() => viewer.moveDir(direzione))) return;
+    }
+
+    if (gen !== (S.moveGen || 0)) return;
+    toast(forward
+      ? 'Da questa parte la strada finisce qui.'
+      : 'Da questa parte non si torna oltre.');
   } catch (e) {
     if (gen !== (S.moveGen || 0) || S.moveActive !== id) return;
     toast(e?.code === 'MOVE_TIMEOUT'
       ? 'Il panorama risponde lentamente. Riprova fra un istante.'
-      : (forward ? 'Da questa parte la strada finisce qui.' : 'Da questa parte non si torna oltre.'));
+      : (e?.code === 'MOVE_NOT_READY'
+          ? 'Il panorama sta ancora caricando le strade. Riprova fra un istante.'
+          : 'Il movimento non è disponibile. Riprova fra un istante.'));
   } finally {
     btn.classList.remove('moving');
     if (gen === (S.moveGen || 0) && S.moveActive === id) {
