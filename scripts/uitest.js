@@ -266,6 +266,27 @@ async function main() {
     ok(await A.isVisible('#btn-fwd') && await A.isVisible('#btn-back'),
       'i comandi avanti/indietro sono in pagina');
 
+    // Il server reale sincronizza il 3-2-1; il server finto dei test lo salta
+    // per velocita`, quindi qui lo si avvia con una scadenza breve e controllata.
+    await A.evaluate(() => {
+      S.clockOffset = 0;
+      avviaIngressoRound({ startsAt: Date.now() + 650, roundIndex: 0, rounds: 3 });
+    });
+    await A.waitForSelector('#round-intro:not([hidden])', { timeout: 2000 });
+    ok(await A.isDisabled('#btn-fwd') && await A.isDisabled('#btn-back'),
+      'durante il 3-2-1 i comandi restano bloccati');
+    await A.waitForFunction(() => document.getElementById('round-intro').hidden, null, { timeout: 3000 });
+    ok(await A.isEnabled('#btn-fwd') && await A.isEnabled('#btn-back'),
+      'al VIA il panorama diventa giocabile');
+
+    ok(await A.locator('.reaction-dock-play .reaction-btn').count() === 4,
+      'durante il round ci sono quattro reazioni rapide');
+    await A.click('.reaction-dock-play .reaction-btn[data-emoji="👏"]');
+    await B.waitForSelector('.reaction-pop', { timeout: 4000 });
+    const reazione = await B.textContent('.reaction-pop');
+    ok(reazione.includes('👏') && reazione.includes('Papa'),
+      'una reazione viene vista in tempo reale dall`altro giocatore');
+
     // help durante il round: si raggiunge senza uscire dalla partita, e i tasti
     // di gioco non devono rispondere mentre si sta leggendo.
     await A.keyboard.press('?');
@@ -336,7 +357,7 @@ async function main() {
       await B.waitForTimeout(80);
       const layout = await B.evaluate(() => {
         const rett = (s) => document.querySelector(s)?.getBoundingClientRect();
-        const visibili = [...document.querySelectorAll('.hud-right .iconbtn:not([hidden]), .navpad .navbtn')]
+        const visibili = [...document.querySelectorAll('.hud-right .iconbtn:not([hidden]), .navpad .navbtn, .reaction-dock .reaction-btn')]
           .filter((n) => getComputedStyle(n).display !== 'none')
           .map((n) => n.getBoundingClientRect());
         const hud = rett('.hud');
@@ -743,6 +764,8 @@ async function main() {
     ok(place.includes('Italia'), `viene mostrato il luogo (${place})`);
     ok((await A.textContent('#reveal-list')).includes('km') ||
        (await A.textContent('#reveal-list')).includes('m'), 'viene mostrata la distanza');
+    ok(await A.isVisible('#reveal-verdict') && (await A.textContent('#reveal-verdict')).length > 12,
+      'la rivelazione si chiude con un verdetto sul round');
     const punteggi = await A.evaluate(() =>
       [...document.querySelectorAll('#reveal-list .pts')].map((e) => e.textContent));
     ok(punteggi.length === 2 && punteggi.every((p) => /^\+[\d.]+$/.test(p)),
@@ -822,6 +845,10 @@ async function main() {
     // In questo test i tiri sono casuali e in modalita` Italia finiscono
     // spesso entrambi a zero: il pareggio e` un esito legittimo.
     ok(/^Vince |^Pareggio/.test(titolo), `il titolo annuncia l\u2019esito: "${titolo}"`);
+
+    const premi = await A.locator('#final-awards .award-card').count();
+    ok(premi >= 3 && (await A.textContent('#final-awards')).includes('Cecchino'),
+      `la serata assegna premi simpatici basati sulla partita (${premi})`);
 
     // mappa riepilogo: un segnalino numerato per round, e le linee dei tiri
     await A.waitForSelector('#finalmap.leaflet-container', { timeout: 8000 });

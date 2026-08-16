@@ -65,6 +65,9 @@ const game = new GameServer({
   token: TOKEN,
   conAlbo: !ALBO_OFF,
   gate: GATE_CODE,
+  // Le localita` finte servono ai test automatici: li` il 3-2-1 rallenterebbe
+  // soltanto la suite. Nelle partite reali e` sincronizzato dal server.
+  introMs: Number(process.env.ROUND_INTRO_MS ?? (FAKE ? 0 : 3000)),
   ...(FAKE ? { provider: fakeProvider } : {}),
 });
 
@@ -369,6 +372,10 @@ wss.on('connection', (ws) => {
           const testo = game.aiutino(room, playerId);
           return send(ws, { type: 'aiutino', indizio: testo });
         }
+
+        case 'reaction':
+          if (!room) return fail(ws, 'Non sei in una stanza.');
+          return game.reaction(room, playerId, msg.emoji);
 
         case 'lobby':
           if (!room) return fail(ws, 'Non sei in una stanza.');

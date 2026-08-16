@@ -220,6 +220,10 @@ function handle(msg) {
       }
       break;
 
+    case 'reaction':
+      mostraReazione(msg);
+      break;
+
     case 'guess_ack':
       riceviGuessAck(msg);
       break;
@@ -512,7 +516,78 @@ function startRound(msg) {
   S.miniMap.setView([20, 0], msg.scope === 'italia' ? 5 : msg.scope === 'europa' ? 3 : 1);
   setTimeout(() => S.miniMap.invalidateSize(), 60);
 
-  startTicker();
+  avviaIngressoRound(msg);
+}
+
+/** Chiude qualunque 3-2-1 rimasto da un round precedente. */
+function chiudiIngressoRound() {
+  clearInterval(S.introHandle);
+  clearTimeout(S.introFine);
+  S.introHandle = null;
+  S.introActive = false;
+  const intro = $('round-intro');
+  intro.hidden = true;
+  intro.classList.remove('si-apre');
+  $('round-intro-num').className = 'round-intro-num';
+}
+
+/**
+ * Conto alla rovescia sincronizzato sull'ora del server. Chi rientra quando il
+ * round e` gia` iniziato lo salta; chi era in lobby vede lo stesso VIA degli
+ * altri e il cronometro comincia solo in quel momento.
+ */
+function avviaIngressoRound(msg) {
+  chiudiIngressoRound();
+  const startsAt = Number(msg.startsAt);
+  const adessoServer = Date.now() + S.clockOffset;
+  if (!Number.isFinite(startsAt) || startsAt - adessoServer < 180) {
+    startTicker();
+    return;
+  }
+
+  const intro = $('round-intro');
+  const numero = $('round-intro-num');
+  $('round-intro-label').textContent = msg.spareggio
+    ? 'Spareggio'
+    : `Round ${msg.roundIndex + 1} di ${msg.rounds}`;
+  intro.hidden = false;
+  S.introActive = true;
+  for (const id of ['btn-fwd', 'btn-back', 'btn-zoomout']) $(id).disabled = true;
+  $('hud-timer').hidden = true;
+
+  let mostrato = null;
+  const aggiorna = () => {
+    const rimasto = startsAt - (Date.now() + S.clockOffset);
+    if (rimasto <= 0) {
+      clearInterval(S.introHandle);
+      S.introHandle = null;
+      S.introActive = false;
+      numero.textContent = 'VIA!';
+      numero.className = 'round-intro-num via batte';
+      intro.classList.add('si-apre');
+      if (!S.semplice) {
+        for (const id of ['btn-fwd', 'btn-back', 'btn-zoomout']) $(id).disabled = false;
+      }
+      Suoni.via();
+      startTicker();
+      S.introFine = setTimeout(() => {
+        intro.hidden = true;
+        intro.classList.remove('si-apre');
+      }, CALMO ? 20 : 500);
+      return;
+    }
+
+    const valore = Math.max(1, Math.ceil(rimasto / 1000));
+    if (valore === mostrato) return;
+    mostrato = valore;
+    numero.textContent = Math.min(3, valore);
+    numero.className = 'round-intro-num';
+    void numero.offsetWidth;
+    numero.classList.add('batte');
+    Suoni.bip(valore <= 1);
+  };
+  aggiorna();
+  S.introHandle = setInterval(aggiorna, 50);
 }
 
 function startTicker() {
@@ -904,6 +979,7 @@ async function provaMovimento(esegui) {
  */
 async function panoMove(forward) {
   if (!S.viewer || !window.mapillary || !mapillary.NavigationDirection) return;
+  if (S.introActive) return;
   if (S.moveActive) return;
   const ora = Date.now();
   if (ora - (S.ultimaMossa || 0) < 180) return;
@@ -974,7 +1050,7 @@ function ensureMiniMap() {
   L.tileLayer(TILES, { attribution: TILE_ATTR, maxZoom: 18, subdomains: 'abcd' }).addTo(S.miniMap);
 
   S.miniMap.on('click', (e) => {
-    if (S.confirmed || S.pendingGuess) return;
+    if (S.introActive || S.confirmed || S.pendingGuess) return;
     const { lat, lng } = e.latlng;
     S.guess = { lat, lng: ((lng + 540) % 360) - 180 };
     if (S.miniMarker) S.miniMarker.setLatLng(e.latlng);
@@ -1061,6 +1137,7 @@ const coloreDi = (r, tutti) => r.colore || COLORI[tutti.indexOf(r) % COLORI.leng
 /* -------------------------------------------------------------- reveal */
 
 function showReveal(msg) {
+  chiudiIngressoRound();
   clearInterval(S.tickHandle);
   clearTimeout(S.guessSendTimer);
   clearTimeout(S.forceTimer);
@@ -1076,6 +1153,9 @@ function showReveal(msg) {
         `href="https://www.google.com/maps/@?api=1&map_action=map&center=${msg.truth.lat},${msg.truth.lng}&zoom=14">` +
         'vai a vedere</a>'
       : '');
+  $('reveal-place').hidden = true;
+  $('reveal-place').classList.remove('reveal-place-svelato');
+  $('reveal-verdict').hidden = true;
   $('btn-next').textContent = msg.spareggio ? 'Vedi chi ha vinto'
     : msg.isLast ? 'Vedi la classifica' : 'Prossimo round';
   $('btn-next').disabled = true;
@@ -1122,6 +1202,10 @@ async function animaRivelazione(msg) {
   // 2. il punto giusto
   L.marker(truth, { icon: pinIcon('🎯', 'sboccia') }).addTo(S.revealLayer);
   Suoni.rivela();
+  const luogo = $('reveal-place');
+  luogo.hidden = false;
+  void luogo.offsetWidth;
+  luogo.classList.add('reveal-place-svelato');
   await attesa(CALMO ? 0 : 450);
 
   // 3. le linee si disegnano verso il punto giusto
@@ -1156,12 +1240,45 @@ async function animaRivelazione(msg) {
     if (!CALMO) await attesa(200);
   }
 
+  const verdetto = verdettoRound(msg.results);
+  const boxVerdetto = $('reveal-verdict');
+  boxVerdetto.innerHTML = `<b>${escapeHtml(verdetto.titolo)}</b>` +
+    `<span>${escapeHtml(verdetto.dettaglio)}</span>`;
+  boxVerdetto.hidden = false;
+
   $('btn-next').disabled = false;
+}
+
+/** Una frase corta che racconta il round senza prendere in giro chi perde. */
+function verdettoRound(results) {
+  const conTiro = results.filter((r) => r.guess).sort((a, b) => a.distanceKm - b.distanceKm);
+  if (!conTiro.length) {
+    return { titolo: '🌫️ Mistero totale', dettaglio: 'Nessuno ha piazzato una bandiera in tempo.' };
+  }
+  const vicino = conTiro[0];
+  if (vicino.distanceKm < 0.1) {
+    return { titolo: '🎯 Centro quasi perfetto!', dettaglio: `${vicino.name} era a soli ${fmtDist(vicino.distanceKm)}.` };
+  }
+  if (vicino.distanceKm < 1) {
+    return { titolo: '🔥 Che colpo!', dettaglio: `${vicino.name} ha mancato il punto di appena ${fmtDist(vicino.distanceKm)}.` };
+  }
+
+  const punti = [...results].sort((a, b) => b.points - a.points);
+  const primo = punti[0];
+  const secondo = punti[1];
+  if (secondo && Math.abs(primo.points - secondo.points) <= 100) {
+    return { titolo: '⚡ Fotofinish!', dettaglio: `Solo ${Math.abs(primo.points - secondo.points)} punti separano i primi due.` };
+  }
+  if (secondo && primo.points - secondo.points >= 1200) {
+    return { titolo: '👑 Round dominato', dettaglio: `${primo.name} prende il largo con ${primo.points.toLocaleString('it-IT')} punti.` };
+  }
+  return { titolo: `📍 Punto a ${primo.name}`, dettaglio: `Il tiro migliore era a ${fmtDist(vicino.distanceKm)} dal luogo giusto.` };
 }
 
 /* --------------------------------------------------------------- finale */
 
 function showFinal(msg) {
+  chiudiIngressoRound();
   clearInterval(S.tickHandle);
   distruggiViewer();
   show('screen-final');
@@ -1187,6 +1304,8 @@ function showFinal(msg) {
   if (primo && !pari && primo.playerId === S.playerId) Suoni.trionfo();
   if (primo && !pari) coriandoli();
 
+  mostraPremiFinali(msg);
+
   // la foto ricordo si disegna dai round giocati: senza storia, niente foto
   S.ultimoFinale = msg;
   $('btn-foto').hidden = !(msg.history && msg.history.length && msg.standings.length);
@@ -1203,6 +1322,62 @@ function showFinal(msg) {
 
   renderAlbo($('final-albo'), msg.albo);
   disegnaRiepilogo(msg.history || []);
+}
+
+/** Calcola piccoli titoli dalla storia della partita, senza modificare punti. */
+function premiFinali(msg) {
+  const storia = msg.history || [];
+  const tiri = storia.flatMap((h, round) =>
+    (h.results || []).filter((r) => r.guess).map((r) => ({ ...r, round: round + 1 })));
+  if (!tiri.length) return [];
+
+  const vicino = tiri.reduce((a, b) => a.distanceKm <= b.distanceKm ? a : b);
+  const lontano = tiri.reduce((a, b) => a.distanceKm >= b.distanceKm ? a : b);
+  const cronometrati = tiri.filter((r) => Number.isFinite(r.elapsedMs));
+  const veloce = cronometrati.length
+    ? cronometrati.reduce((a, b) => a.elapsedMs <= b.elapsedMs ? a : b)
+    : null;
+
+  const vittorie = new Map();
+  for (const h of storia) {
+    const rs = (h.results || []).filter((r) => r.guess);
+    if (!rs.length) continue;
+    const massimo = Math.max(...rs.map((r) => r.points));
+    rs.filter((r) => r.points === massimo).forEach((r) =>
+      vittorie.set(r.playerId, (vittorie.get(r.playerId) || 0) + 1));
+  }
+  const reRound = [...msg.standings].sort((a, b) =>
+    (vittorie.get(b.playerId) || 0) - (vittorie.get(a.playerId) || 0))[0];
+
+  const premi = [
+    { icon: '🎯', titolo: 'Cecchino', nome: vicino.name,
+      dettaglio: `${fmtDist(vicino.distanceKm)} dal bersaglio · round ${vicino.round}` },
+  ];
+  if (veloce) premi.push({
+    icon: '⚡', titolo: 'Fulmine', nome: veloce.name,
+    dettaglio: `bandiera in ${(veloce.elapsedMs / 1000).toFixed(1).replace('.', ',')} secondi`,
+  });
+  if (reRound) premi.push({
+    icon: '👑', titolo: 'Re dei round', nome: reRound.name,
+    dettaglio: `${vittorie.get(reRound.playerId) || 0} round al primo posto`,
+  });
+  if (tiri.length > 1) premi.push({
+    icon: '🌍', titolo: 'Giramondo', nome: lontano.name,
+    dettaglio: `il viaggio più lungo: ${fmtDist(lontano.distanceKm)}`,
+  });
+  return premi.slice(0, 4);
+}
+
+function mostraPremiFinali(msg) {
+  const premi = premiFinali(msg);
+  const box = $('final-awards');
+  if (!premi.length) { box.hidden = true; return; }
+  box.hidden = false;
+  box.innerHTML = '<h3>Premi della serata</h3><div class="award-grid">' +
+    premi.map((p) => '<div class="award-card">' +
+      `<span class="award-icon">${p.icon}</span>` +
+      `<b>${escapeHtml(p.titolo)}</b><strong>${escapeHtml(p.nome)}</strong>` +
+      `<small>${escapeHtml(p.dettaglio)}</small></div>`).join('') + '</div>';
 }
 
 /** Tutta la partita su una mappa sola: dove eravate e dove avete tirato. */
@@ -1658,6 +1833,34 @@ $('btn-start').addEventListener('click', () => send({ type: 'start' }));
 $('btn-next').addEventListener('click', () => send({ type: 'next' }));
 $('btn-again').addEventListener('click', () => send({ type: 'lobby' }));
 
+/** Mostra una reazione sincronizzata senza rubare tocchi al gioco. */
+function mostraReazione(msg) {
+  const stage = $('reaction-stage');
+  const pop = document.createElement('div');
+  pop.className = 'reaction-pop';
+  pop.style.setProperty('--dx', `${Math.round((Math.random() - 0.5) * Math.min(220, innerWidth * 0.45))}px`);
+  const emoji = document.createElement('span');
+  emoji.className = 'emoji';
+  emoji.textContent = msg.emoji;
+  const chi = document.createElement('span');
+  chi.className = 'chi';
+  chi.textContent = `${msg.avatar || ''} ${msg.name || 'Giocatore'}`.trim();
+  pop.append(emoji, chi);
+  stage.appendChild(pop);
+  Suoni.reazione();
+  setTimeout(() => pop.remove(), CALMO ? 100 : 2300);
+  while (stage.children.length > 5) stage.firstElementChild.remove();
+}
+
+els('.reaction-btn').forEach((b) => b.addEventListener('click', () => {
+  const ora = Date.now();
+  if (ora < (S.reactionLock || 0)) return;
+  S.reactionLock = ora + 700;
+  send({ type: 'reaction', emoji: b.dataset.emoji });
+  els('.reaction-btn').forEach((x) => { x.disabled = true; });
+  setTimeout(() => els('.reaction-btn').forEach((x) => { x.disabled = false; }), 700);
+}));
+
 function leave() {
   // L'uscita col pulsante e' esplicita: lo si dice al server, che toglie
   // subito dalla stanza. Un collegamento che cade e basta, invece, viene
@@ -1667,6 +1870,7 @@ function leave() {
   if (S.ws) S.ws.close();
   S.ws = null; S.room = null; S.code = null;
   clearInterval(S.tickHandle);
+  chiudiIngressoRound();
   history.replaceState(null, '', '/');
   show('screen-home');
 }
@@ -1744,7 +1948,7 @@ function riceviGuessAck(msg) {
 }
 
 $('btn-confirm').addEventListener('click', () => {
-  if (S.confirmed || S.pendingGuess || !S.guess) return;
+  if (S.introActive || S.confirmed || S.pendingGuess || !S.guess) return;
   const id = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random()}`;
   S.pendingGuess = {
     lat: S.guess.lat,
@@ -2040,6 +2244,7 @@ async function vigilaZoom() {
 
 document.addEventListener('keydown', (e) => {
   if (S.screen !== 'screen-play') return;
+  if (S.introActive) { e.preventDefault(); return; }
   if (e.target.tagName === 'INPUT') return;
   if (e.key === 'm' || e.key === 'M') toggleMap();
   if (e.key === 'Escape') toggleMap(false);

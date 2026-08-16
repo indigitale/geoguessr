@@ -25,6 +25,7 @@ export const SCOPE_VALUES = ['mondo', 'europa', 'italia'];
 export const ROUND_VALUES = [3, 5, 7, 10];
 export const TIMER_VALUES = [0, 60, 120, 180, 300]; // 0 = senza limite
 export const VANTAGGIO_VALUES = [0, 0.15, 0.3, 0.5];
+export const REACTION_VALUES = ['😂', '😱', '👏', '🤔'];
 
 // Emoji scegliibili come avatar. Il colore invece lo assegna il server, cosi`
 // due giocatori non finiscono mai con lo stesso sulla mappa.
@@ -54,7 +55,8 @@ function clean(name) {
 export class GameServer {
   // provider e' iniettabile: in produzione e' Mapillary, nei test e' finto.
   constructor({ token, provider = pickLocation, conAlbo = true, gate = '',
-                lobbyGrazia = Number(process.env.LOBBY_GRAZIA_MS || 300_000) }) {
+                lobbyGrazia = Number(process.env.LOBBY_GRAZIA_MS || 300_000),
+                introMs = 0 }) {
     this.token = token;
     this.provider = provider;
     this.conAlbo = conAlbo; // i test non devono sporcare l'albo vero
@@ -67,6 +69,9 @@ export class GameServer {
     // costruire link e QR d'invito senza dipendere da cosa si ricorda —
     // il QR di un tablet che l'aveva "dimenticata" usciva senza parola.
     this.gate = String(gate || '');
+    // In produzione il server riserva qualche secondo al 3-2-1 iniziale. Nei
+    // test e nelle installazioni che non lo vogliono resta configurabile a 0.
+    this.introMs = Math.max(0, Math.min(5000, Number(introMs) || 0));
     this.rooms = new Map();
     setInterval(() => this.sweep(), 10 * 60 * 1000).unref?.();
   }
@@ -143,6 +148,7 @@ export class GameServer {
       avatar: AVATAR_VALUES[room.players.size % AVATAR_VALUES.length],
       colore: COLORI[room.players.size % COLORI.length],
       connected: true,
+      lastReactionAt: 0,
       ws: null,
     };
     room.players.set(p.id, p);
@@ -272,14 +278,18 @@ export class GameServer {
     room.location = loc;
     room.roundScope = ambito;
     room.phase = 'playing';
-    room.roundStartedAt = Date.now();
-    room.deadline = room.timer > 0 ? Date.now() + room.timer * 1000 : null;
+    room.roundStartsAt = Date.now() + this.introMs;
+    room.roundStartedAt = room.roundStartsAt;
+    room.deadline = room.timer > 0 ? room.roundStartsAt + room.timer * 1000 : null;
 
     this.sync(room);
     this.broadcast(room, this.roundMessage(room));
 
     if (room.deadline) {
-      room.timerHandle = setTimeout(() => this.reveal(room), room.timer * 1000 + 500);
+      room.timerHandle = setTimeout(
+        () => this.reveal(room),
+        Math.max(0, room.deadline - Date.now()) + 500
+      );
     }
   }
 
@@ -313,13 +323,17 @@ export class GameServer {
     room.location = loc;
     room.roundScope = room.scope;
     room.phase = 'playing';
-    room.roundStartedAt = Date.now();
-    room.deadline = room.timer > 0 ? Date.now() + room.timer * 1000 : null;
+    room.roundStartsAt = Date.now() + this.introMs;
+    room.roundStartedAt = room.roundStartsAt;
+    room.deadline = room.timer > 0 ? room.roundStartsAt + room.timer * 1000 : null;
 
     this.sync(room);
     this.broadcast(room, { ...this.roundMessage(room), spareggio: true });
     if (room.deadline) {
-      room.timerHandle = setTimeout(() => this.reveal(room), room.timer * 1000 + 500);
+      room.timerHandle = setTimeout(
+        () => this.reveal(room),
+        Math.max(0, room.deadline - Date.now()) + 500
+      );
     }
   }
 
@@ -333,6 +347,7 @@ export class GameServer {
       thumbUrl: room.location.thumbUrl || null,
       scope: room.roundScope || room.scope,
       deadline: room.deadline,
+      startsAt: room.roundStartsAt || null,
       now: Date.now(),
       token: this.token,
     };
@@ -356,6 +371,27 @@ export class GameServer {
     room.aiutini.set(playerId, testo);
     this.sync(room);
     return testo;
+  }
+
+  /** Reazione rapida, effimera e limitata per evitare raffiche involontarie. */
+  reaction(room, playerId, emoji) {
+    if (!['playing', 'reveal', 'finished'].includes(room.phase)) {
+      throw new Error('Le reazioni si usano durante la partita.');
+    }
+    if (!REACTION_VALUES.includes(emoji)) throw new Error('Reazione non valida.');
+    const p = room.players.get(playerId);
+    if (!p) throw new Error('Giocatore inesistente.');
+    const ora = Date.now();
+    if (ora - (p.lastReactionAt || 0) < 650) return false;
+    p.lastReactionAt = ora;
+    this.broadcast(room, {
+      type: 'reaction',
+      playerId: p.id,
+      name: p.name,
+      avatar: p.avatar,
+      emoji,
+    });
+    return true;
   }
 
   /** Chi manca ancora all'appello, fra quelli attesi e ancora collegati. */
@@ -404,7 +440,7 @@ export class GameServer {
     room.guesses.set(playerId, {
       lat,
       lng,
-      elapsedMs: Date.now() - room.roundStartedAt,
+      elapsedMs: Math.max(0, Date.now() - room.roundStartedAt),
     });
 
     if (primo) this.startSprint(room, playerId);
@@ -459,6 +495,7 @@ export class GameServer {
     this.clearTimer(room);
     room.phase = 'reveal';
     room.deadline = null;
+    room.roundStartsAt = null;
 
     const truth = { lat: room.location.lat, lng: room.location.lng };
     const results = [];

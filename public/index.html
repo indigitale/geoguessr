@@ -179,6 +179,11 @@
   <div id="pano"></div>
   <div id="panoerr" class="panoerr" hidden></div>
   <div id="countdown" class="countdown" hidden></div>
+  <div id="round-intro" class="round-intro" hidden aria-live="assertive">
+    <div id="round-intro-label" class="round-intro-label">Round 1</div>
+    <div id="round-intro-num" class="round-intro-num">3</div>
+    <div class="round-intro-sub">Guardati attorno. Fidati dell’istinto.</div>
+  </div>
 
   <div class="hud">
     <div class="hud-pill" id="hud-round">Round 1/5</div>
@@ -200,6 +205,13 @@
     <button id="btn-back" class="navbtn" type="button" title="Indietro lungo la strada (freccia giu&#768;)" aria-label="Vai indietro lungo la strada">↓</button>
     <button id="btn-zoomout" class="navbtn small" type="button" title="Allontana la visuale (tasto -)" aria-label="Riduci lo zoom del panorama">−</button>
     <span class="navlabel">zoom</span>
+  </div>
+
+  <div class="reaction-dock reaction-dock-play" aria-label="Reazioni rapide">
+    <button class="reaction-btn" type="button" data-emoji="😂" aria-label="Reagisci: che ridere">😂</button>
+    <button class="reaction-btn" type="button" data-emoji="😱" aria-label="Reagisci: incredibile">😱</button>
+    <button class="reaction-btn" type="button" data-emoji="👏" aria-label="Reagisci: applauso">👏</button>
+    <button class="reaction-btn" type="button" data-emoji="🤔" aria-label="Reagisci: dubbio">🤔</button>
   </div>
 
   <div id="guessbox" class="guessbox">
@@ -224,6 +236,14 @@
     <div class="reveal-panel">
       <h2 id="reveal-title">Round 1</h2>
       <p class="sub" id="reveal-place"></p>
+      <div class="reaction-row" aria-label="Reazioni rapide">
+        <span>Reagisci</span>
+        <button class="reaction-btn" type="button" data-emoji="😂" aria-label="Reagisci: che ridere">😂</button>
+        <button class="reaction-btn" type="button" data-emoji="😱" aria-label="Reagisci: incredibile">😱</button>
+        <button class="reaction-btn" type="button" data-emoji="👏" aria-label="Reagisci: applauso">👏</button>
+        <button class="reaction-btn" type="button" data-emoji="🤔" aria-label="Reagisci: dubbio">🤔</button>
+      </div>
+      <div id="reveal-verdict" class="reveal-verdict" hidden></div>
       <ul id="reveal-list" class="results"></ul>
       <button id="btn-next" class="primary big" hidden>Prossimo round</button>
       <p id="reveal-info" class="sub"></p>
@@ -237,7 +257,15 @@
     <div id="finalmap"></div>
     <div class="reveal-panel">
       <h1 id="final-title">Fine partita</h1>
+      <div class="reaction-row" aria-label="Reazioni rapide">
+        <span>Reagisci</span>
+        <button class="reaction-btn" type="button" data-emoji="😂" aria-label="Reagisci: che ridere">😂</button>
+        <button class="reaction-btn" type="button" data-emoji="😱" aria-label="Reagisci: incredibile">😱</button>
+        <button class="reaction-btn" type="button" data-emoji="👏" aria-label="Reagisci: applauso">👏</button>
+        <button class="reaction-btn" type="button" data-emoji="🤔" aria-label="Reagisci: dubbio">🤔</button>
+      </div>
       <ul id="final-list" class="standings"></ul>
+      <div id="final-awards" class="final-awards" hidden></div>
       <div id="final-novita" class="novita" hidden></div>
       <div id="final-albo" class="albo" hidden></div>
       <button id="btn-foto" class="ghost small" hidden>&#128248; Foto ricordo da condividere</button>
@@ -330,6 +358,12 @@
     </section>
 
     <section>
+      <h3>Reazioni</h3>
+      <p>I pulsanti <b>😂 😱 👏 🤔</b> mandano una reazione veloce a tutti gli
+      altri giocatori. Non interrompono il round e non rivelano la tua scelta.</p>
+    </section>
+
+    <section>
       <h3>Se giocate a forze diverse</h3>
       <p>In lobby, chi ospita puo&#768; dare un <b>vantaggio</b> a chi e&#768; in
       difficolta&#768; &mdash; +15%, +30%, +50% &mdash; che gli allarga il metro del
@@ -359,6 +393,7 @@
 </div>
 
 <div id="flash" class="flash" hidden></div>
+<div id="reaction-stage" class="reaction-stage" aria-live="polite" aria-atomic="false"></div>
 <button id="btn-sblocca" class="sblocca" hidden>Rimetti a posto lo schermo</button>
 <div id="toast" class="toast" hidden></div>
 

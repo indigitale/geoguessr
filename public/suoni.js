@@ -77,6 +77,16 @@ const Suoni = (() => {
       if (finale) vibra(35);
     },
 
+    /** Il round si apre e i comandi diventano attivi. */
+    via() {
+      nota(523, 0.12, 'triangle', 0.15);
+      nota(784, 0.18, 'triangle', 0.14, 0.07);
+      vibra(22);
+    },
+
+    /** Una reazione emoji e` arrivata. */
+    reazione() { nota(620, 0.07, 'sine', 0.08); nota(880, 0.09, 'sine', 0.07, 0.05); },
+
     /** Nessuna risposta, o tiro pessimo. */
     tonfo() { nota(150, 0.25, 'sawtooth', 0.1); },
 
