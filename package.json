@@ -20,5 +20,8 @@
     "@mapbox/vector-tile": "^3.0.0",
     "pbf": "^5.1.2",
     "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "playwright": "^1.62.1"
   }
 }

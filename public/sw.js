@@ -11,7 +11,7 @@
 // Alzare il numero butta via TUTTA la cache vecchia alla prossima visita:
 // e' la leva da tirare quando un aggiornamento importante non deve convivere
 // con nessun residuo del passato.
-const CACHE = 'geoduello-v2';
+const CACHE = 'geoduello-v3';
 
 // Solo roba che non cambia mai: le librerie di terze parti e le icone.
 const STABILI = /\/vendor\/|\/icone\//;

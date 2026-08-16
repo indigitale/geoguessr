@@ -391,12 +391,14 @@ export class GameServer {
   }
 
   guess(room, playerId, lat, lng) {
-    if (room.phase !== 'playing') return;
-    if (!room.players.has(playerId)) return;
-    if (room.guesses.has(playerId)) return;
-    if (typeof lat !== 'number' || typeof lng !== 'number') return;
-    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
-    if (lat < -90 || lat > 90 || lng < -180 || lng > 180) return;
+    if (room.phase !== 'playing') return false;
+    if (!room.players.has(playerId)) return false;
+    // Il client ritenta finche` non riceve l'ACK. Una ripetizione della stessa
+    // risposta e` quindi un successo idempotente, non un errore.
+    if (room.guesses.has(playerId)) return true;
+    if (typeof lat !== 'number' || typeof lng !== 'number') return false;
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return false;
+    if (lat < -90 || lat > 90 || lng < -180 || lng > 180) return false;
 
     const primo = room.guesses.size === 0;
     room.guesses.set(playerId, {
@@ -419,6 +421,7 @@ export class GameServer {
 
     this.sync(room);
     this.maybeReveal(room);
+    return true;
   }
 
   /** Il primo ha risposto: agli altri restano SPRINT_MS, se ne avevano di piu'. */
@@ -609,9 +612,12 @@ export class GameServer {
     this.sync(room);
   }
 
-  disconnect(room, playerId) {
+  disconnect(room, playerId, socket = null) {
     const p = room.players.get(playerId);
     if (!p) return;
+    // Se lo stesso giocatore si e` gia` ricollegato, la chiusura tardiva del
+    // vecchio WebSocket non deve marchiare offline quello nuovo.
+    if (socket && p.ws && p.ws !== socket) return;
     p.connected = false;
     p.disconnectedAt = Date.now();
     p.ws = null;

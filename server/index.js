@@ -110,7 +110,12 @@ const MIME = {
 const VERSIONE = (() => {
   try {
     const h = crypto.createHash('sha1');
-    for (const f of ['app.js', 'index.html', 'style.css']) {
+    for (const f of [
+      'app.js', 'index.html', 'style.css', 'suoni.js', 'sw.js',
+      'vendor/qrcode/qrcode.js',
+      'vendor/mapillary/mapillary.js', 'vendor/mapillary/mapillary.css',
+      'vendor/leaflet/leaflet.js', 'vendor/leaflet/leaflet.css',
+    ]) {
       h.update(fs.readFileSync(path.join(PUBLIC_DIR, f)));
     }
     return h.digest('hex').slice(0, 7);
@@ -335,9 +340,17 @@ wss.on('connection', (ws) => {
           if (!room) return fail(ws, 'Non sei in una stanza.');
           return await game.nextRound(room, playerId);
 
-        case 'guess':
+        case 'guess': {
           if (!room) return fail(ws, 'Non sei in una stanza.');
-          return game.guess(room, playerId, Number(msg.lat), Number(msg.lng));
+          const roundIndex = room.roundIndex;
+          const accepted = game.guess(room, playerId, Number(msg.lat), Number(msg.lng));
+          return send(ws, {
+            type: 'guess_ack',
+            accepted: !!accepted,
+            roundIndex,
+            guessId: typeof msg.guessId === 'string' ? msg.guessId.slice(0, 100) : null,
+          });
+        }
 
         case 'force':
           if (!room) return fail(ws, 'Non sei in una stanza.');
@@ -379,7 +392,7 @@ wss.on('connection', (ws) => {
 
   ws.on('close', () => {
     const { room, playerId } = ws.ctx;
-    if (room && playerId) game.disconnect(room, playerId);
+    if (room && playerId) game.disconnect(room, playerId, ws);
   });
 
   ws.on('error', () => {});

@@ -119,10 +119,20 @@ export async function tileImages(token, { z, x, y }, { signal } = {}) {
       lat,
       lng,
       isPano: !!p.is_pano,
+      sequenceId: p.sequence_id != null ? String(p.sequence_id) : null,
       capturedAt: typeof p.captured_at === 'number' ? p.captured_at : 0,
       quality: typeof p.quality_score === 'number' ? p.quality_score : 0,
     });
   }
+
+  // Una foto isolata puo` essere bellissima ma non permette di camminare.
+  // La presenza di piu` scatti della stessa sequenza nel campione e` un buon
+  // indicatore di una strada realmente percorribile.
+  const frequenze = new Map();
+  for (const img of images) {
+    if (img.sequenceId) frequenze.set(img.sequenceId, (frequenze.get(img.sequenceId) || 0) + 1);
+  }
+  for (const img of images) img.sequencePeers = img.sequenceId ? (frequenze.get(img.sequenceId) || 0) : 0;
 
   remember(key, images);
   return images;
@@ -154,7 +164,11 @@ function pickBest(images, { panoOnly = false } = {}, quanti = 1) {
   const out = [];
   const visti = new Set();
   for (const t of tiers) {
-    for (const img of shuffle(t)) {
+    const ordinati = shuffle(t).sort((a, b) =>
+      (b.sequencePeers || 0) - (a.sequencePeers || 0)
+      || (b.quality || 0) - (a.quality || 0)
+      || (b.capturedAt || 0) - (a.capturedAt || 0));
+    for (const img of ordinati) {
       if (visti.has(img.id)) continue;
       visti.add(img.id);
       out.push(img);
@@ -187,7 +201,10 @@ async function scegliNitida(token, candidati) {
         .catch(() => null)
     )
   );
-  const validi = info.filter(Boolean).sort((a, b) => b.width - a.width);
+  const validi = info.filter(Boolean).sort((a, b) =>
+    (b.sequencePeers || 0) - (a.sequencePeers || 0)
+    || b.width - a.width
+    || (b.quality || 0) - (a.quality || 0));
   if (!validi.length) return { scelta: null, ripiego: null };
 
   const soglia = validi.filter((v) => v.width >= (v.isPano ? MIN_W_PANO : MIN_W_FLAT));

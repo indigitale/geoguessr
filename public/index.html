@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta id="viewport" name="viewport"
-      content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+      content="width=device-width, initial-scale=1, viewport-fit=cover" />
 <title>GeoDuello</title>
 <meta name="theme-color" content="#0b0e13" />
 <link rel="manifest" href="manifest.webmanifest" />
@@ -14,8 +14,8 @@
 <meta name="apple-mobile-web-app-title" content="GeoDuello" />
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🌍</text></svg>" />
 
-<link href="vendor/mapillary/mapillary.css" rel="stylesheet" />
-<link href="vendor/leaflet/leaflet.css" rel="stylesheet" />
+<link href="vendor/mapillary/mapillary.css?v={{V}}" rel="stylesheet" />
+<link href="vendor/leaflet/leaflet.css?v={{V}}" rel="stylesheet" />
 <!-- ?v= e' l'impronta della versione, iniettata dal server: quando il codice
      cambia, cambia l'indirizzo, e nessuna cache puo' servire quello vecchio -->
 <link href="style.css?v={{V}}" rel="stylesheet" />
@@ -184,21 +184,21 @@
     <div class="hud-pill" id="hud-round">Round 1/5</div>
     <div class="hud-pill" id="hud-timer" hidden>2:00</div>
     <div class="hud-pill hud-scope" id="hud-scope">Mondo</div>
-    <button class="hud-pill aiutino" id="btn-aiutino">&#128161; Aiutino</button>
+    <button class="hud-pill aiutino" id="btn-aiutino" type="button">&#128161; Aiutino</button>
   </div>
 
   <div class="hud-right">
-    <button class="iconbtn apri-help" id="btn-help" title="Come si gioca (tasto ?)">?</button>
-    <button id="btn-sound" class="iconbtn" title="Suoni">🔊</button>
-    <button id="btn-home-pano" class="iconbtn" title="Torna al punto di partenza e azzera lo zoom">⌂</button>
-    <button id="btn-fs" class="iconbtn" title="Schermo intero">⛶</button>
+    <button class="iconbtn apri-help" id="btn-help" type="button" title="Come si gioca (tasto ?)" aria-label="Come si gioca">?</button>
+    <button id="btn-sound" class="iconbtn" type="button" title="Suoni" aria-label="Attiva o disattiva i suoni">🔊</button>
+    <button id="btn-home-pano" class="iconbtn" type="button" title="Torna al punto di partenza e azzera lo zoom" aria-label="Torna al punto di partenza">⌂</button>
+    <button id="btn-fs" class="iconbtn" type="button" title="Schermo intero" aria-label="Attiva schermo intero">⛶</button>
   </div>
 
   <div class="navpad">
-    <button id="btn-fwd" class="navbtn" title="Avanti lungo la strada (freccia su)">↑</button>
+    <button id="btn-fwd" class="navbtn" type="button" title="Avanti lungo la strada (freccia su)" aria-label="Vai avanti lungo la strada">↑</button>
     <span class="navlabel">muoviti</span>
-    <button id="btn-back" class="navbtn" title="Indietro lungo la strada (freccia giu&#768;)">↓</button>
-    <button id="btn-zoomout" class="navbtn small" title="Allontana la visuale (tasto -)">−</button>
+    <button id="btn-back" class="navbtn" type="button" title="Indietro lungo la strada (freccia giu&#768;)" aria-label="Vai indietro lungo la strada">↓</button>
+    <button id="btn-zoomout" class="navbtn small" type="button" title="Allontana la visuale (tasto -)" aria-label="Riduci lo zoom del panorama">−</button>
     <span class="navlabel">zoom</span>
   </div>
 
@@ -363,9 +363,9 @@
 <div id="toast" class="toast" hidden></div>
 
 <script src="suoni.js?v={{V}}"></script>
-<script src="vendor/qrcode/qrcode.js"></script>
-<script src="vendor/mapillary/mapillary.js"></script>
-<script src="vendor/leaflet/leaflet.js"></script>
+<script src="vendor/qrcode/qrcode.js?v={{V}}"></script>
+<script src="vendor/mapillary/mapillary.js?v={{V}}"></script>
+<script src="vendor/leaflet/leaflet.js?v={{V}}"></script>
 <script src="app.js?v={{V}}"></script>
 </body>
 </html>

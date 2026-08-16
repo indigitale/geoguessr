@@ -263,6 +263,11 @@ async function graziaTest() {
   // rientra e riesce a giocare il suo turno
   const rientrato = g.addPlayer(room, { name: 'Figlio', playerId: figlio.id });
   ok(rientrato.id === figlio.id && rientrato.connected, 'rientrando riprende il suo posto');
+  const socketNuovo = {};
+  rientrato.ws = socketNuovo;
+  g.disconnect(room, figlio.id, {}); // si chiude in ritardo il vecchio socket
+  ok(rientrato.connected && rientrato.ws === socketNuovo,
+    'la chiusura tardiva del vecchio collegamento non spegne quello nuovo');
   g.guess(room, figlio.id, 45.2, 9.2);
   ok(room.phase === 'reveal', 'una volta rientrato puo` rispondere e il round si chiude');
   ok(room.lastReveal.results.every((r) => r.guess), 'entrambi i tiri sono finiti nel risultato');
@@ -587,7 +592,14 @@ async function main() {
 
     // un solo giocatore risponde: la partita non deve rivelare nulla
     a.drain();
-    a.send({ type: 'guess', lat: 45.0, lng: 9.0 });
+    a.send({ type: 'guess', lat: 45.0, lng: 9.0, guessId: 'primo-tiro' });
+    const ack1 = await a.wait('guess_ack');
+    ok(ack1.accepted && ack1.roundIndex === 0 && ack1.guessId === 'primo-tiro',
+      'il server conferma esplicitamente la risposta ricevuta');
+    a.send({ type: 'guess', lat: 0, lng: 0, guessId: 'ritentativo' });
+    const ackRetry = await a.wait((m) => m.type === 'guess_ack' && m.guessId === 'ritentativo');
+    ok(ackRetry.accepted && ackRetry.guessId === 'ritentativo',
+      'un ritentativo di rete riceve ACK senza cambiare la prima risposta');
     const partial = await a.wait((m) => m.type === 'state' && m.room.players.some((p) => p.hasGuessed));
     ok(
       partial.room.players.filter((p) => p.hasGuessed).length === 1,

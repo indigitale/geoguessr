@@ -92,6 +92,7 @@ const S = {
   round: null,
   startImageId: null,
   guess: null,          // {lat,lng} scelta locale non ancora confermata
+  pendingGuess: null,   // scelta in attesa della conferma esplicita del server
   confirmed: false,
   clockOffset: 0,       // serverNow - clientNow
   deadline: null,
@@ -126,15 +127,19 @@ function connect(onOpen) {
   S.ws = ws;
 
   ws.onopen = () => {
+    if (S.ws !== ws) { ws.close(); return; }
     S.reconnectDelay = 800;
     onOpen && onOpen();
+    inviaGuessPendente();
   };
   ws.onmessage = (ev) => {
+    if (S.ws !== ws) return;
     let msg;
     try { msg = JSON.parse(ev.data); } catch { return; }
     handle(msg);
   };
   ws.onclose = () => {
+    if (S.ws !== ws) return;
     if (!S.wantOpen) return;
     if (S.code && S.screen !== 'screen-home') {
       toast('Connessione persa, riprovo…');
@@ -148,7 +153,13 @@ function connect(onOpen) {
 }
 
 function send(msg) {
-  if (S.ws && S.ws.readyState === 1) S.ws.send(JSON.stringify(msg));
+  if (!S.ws || S.ws.readyState !== 1) return false;
+  try {
+    S.ws.send(JSON.stringify(msg));
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 setInterval(() => send({ type: 'ping' }), 25000);
@@ -207,6 +218,10 @@ function handle(msg) {
         Suoni.bandiera();
         toast(`${msg.name} ha piazzato la bandiera! ${msg.quanti}/${msg.attesi}`, 3000);
       }
+      break;
+
+    case 'guess_ack':
+      riceviGuessAck(msg);
       break;
 
     case 'aiutino': {
@@ -348,11 +363,9 @@ function renderRoom() {
   // Rientrando a meta` round: se avevamo gia` risposto, l'interfaccia lo
   // deve sapere, altrimenti offre di rispondere una seconda volta.
   const io = r.players.find((p) => p.id === S.playerId);
-  if (r.phase === 'playing' && io && io.hasGuessed && !S.confirmed) {
-    S.confirmed = true;
-    $('btn-confirm').disabled = true;
-    $('btn-confirm').textContent = 'Scelta inviata';
-    $('waiting').hidden = false;
+  if (r.phase === 'playing' && io) {
+    if (io.hasGuessed) riceviGuessAck({ accepted: true, roundIndex: r.roundIndex });
+    else if (S.pendingGuess && S.pendingGuess.roundIndex === r.roundIndex) inviaGuessPendente();
   }
 
   // stato di attesa durante il gioco
@@ -457,10 +470,13 @@ function escapeHtml(s) {
 function startRound(msg) {
   S.round = msg;
   S.guess = null;
+  S.pendingGuess = null;
   S.confirmed = false;
   S.startImageId = msg.imageId;
   S.thumbUrl = msg.thumbUrl || null;
   S.semplice = false;
+  S.contestoRipreso = false;
+  clearTimeout(S.guessSendTimer);
   chiudiHelp(); // se stava leggendo le regole, il round ha la precedenza
   chiudiFoto();
   clearTimeout(S.aiutinoTimer);
@@ -477,8 +493,7 @@ function startRound(msg) {
   clearTimeout(S.forceTimer);
   // I comandi di movimento ripartono sempre attivi, qualunque cosa sia
   // successa nel round precedente.
-  S.inMovimento = false;
-  S.movimentoFinoA = 0;
+  S.moveActive = null;
   S.moveGen = (S.moveGen || 0) + 1; // invalida eventuali movimenti in sospeso
   for (const id of ['btn-fwd', 'btn-back', 'btn-zoomout']) {
     $(id).disabled = false;
@@ -614,6 +629,8 @@ function distruggiViewer() {
   clearInterval(S.zoomWatch);
   S.zoomWatch = null;
   clearTimeout(S.panoWatch);
+  S.moveGen = (S.moveGen || 0) + 1;
+  S.moveActive = null;
   if (S.viewer) {
     try { S.viewer.remove(); } catch { /* gia` chiuso */ }
     S.viewer = null;
@@ -629,15 +646,24 @@ function distruggiViewer() {
  */
 function sorvegliaContesto(token, imageId) {
   const tela = $('pano').querySelector('canvas');
-  if (!tela) return;
+  if (!tela || tela.dataset.gdContesto === '1') return;
+  tela.dataset.gdContesto = '1';
   tela.addEventListener('webglcontextlost', (e) => {
     e.preventDefault();
     if (S.contestoRipreso) {
-      return panoError('La grafica 3D di questo dispositivo si e’ arresa. Prova a chiudere le altre schede del browser e ricarica.');
+      if (modalitaSemplice(S.thumbUrl, 'la grafica 3D si è interrotta')) return;
+      return mostraGuasto('La grafica 3D di questo dispositivo si è interrotta.');
     }
     S.contestoRipreso = true;
     panoError('Recupero il panorama…');
-    setTimeout(() => ensureViewer(token, imageId), 400);
+    setTimeout(async () => {
+      let corrente = imageId;
+      try {
+        const img = await S.viewer?.getImage();
+        if (img?.id) corrente = img.id;
+      } catch { /* si riparte dalla foto iniziale */ }
+      ensureViewer(token, corrente);
+    }, 400);
   }, { once: true });
 }
 
@@ -648,7 +674,17 @@ function ensureViewer(token, imageId) {
     return;
   }
 
+  if (typeof mapillary.isSupported === 'function' && !mapillary.isSupported()) {
+    if (!modalitaSemplice(S.thumbUrl, 'grafica 3D non supportata')) {
+      mostraGuasto('Questo dispositivo non supporta il panorama 3D.');
+    }
+    return;
+  }
+
   distruggiViewer();
+  S.semplice = false;
+  S.viewerToken = token;
+  S.edgePronti = false;
 
   try {
     S.viewer = new mapillary.Viewer({
@@ -656,15 +692,34 @@ function ensureViewer(token, imageId) {
       container: 'pano',
       imageId,
       imageTiling: true, // tessere ad alta risoluzione quando si zooma
-      component: { cover: false },
+      // L'interfaccia usa comandi propri, grandi e raggiungibili col pollice.
+      // Quelli nativi duplicavano frecce e zoom sopra HUD e minimappa.
+      component: {
+        cover: false,
+        direction: false,
+        sequence: false,
+        zoom: false,
+        bearing: false,
+        keyboard: false,
+      },
     });
-    S.viewer.on('image', () => { panoOk(); vigilaZoom(); });
+    S.viewer.on('image', () => {
+      panoOk();
+      S.edgePronti = false;
+      vigilaZoom();
+      setTimeout(() => sorvegliaContesto(token, imageId), 0);
+    });
+    const edgePronti = () => { S.edgePronti = true; };
+    S.viewer.on('spatialedges', edgePronti);
+    S.viewer.on('sequenceedges', edgePronti);
     // Lo zoom cambia anche con le pinzate: il pulsante per uscirne deve
     // accendersi comunque, non solo quando lo si usa.
     S.zoomWatch = setInterval(vigilaZoom, 1200);
-    sorvegliaContesto(token, imageId);
   } catch (e) {
-    panoError(`Il visore non è partito: ${escapeHtml(e.message || e)}`);
+    annota(`Avvio panorama: ${e.message || e}`);
+    if (!modalitaSemplice(S.thumbUrl, 'il visore 3D non è partito')) {
+      mostraGuasto('Il panorama non è partito su questo dispositivo.');
+    }
     return;
   }
 
@@ -706,146 +761,90 @@ function mostraGuasto(titolo) {
 
 /* ------------------------------------------------- spostarsi nel panorama */
 
-const MOVE_TIMEOUT_MS = 3500; // oltre questo, MapillaryJS non ce la fa
-const MOVE_LOCK_MS = 800;     // anti doppio-tap, non attesa del movimento
+const MOVE_TIMEOUT_MS = 5000;
+const EDGE_WAIT_MS = 900;
 
 function conScadenza(promessa, ms) {
+  let timer;
   return Promise.race([
     Promise.resolve(promessa),
-    new Promise((_, rifiuta) => setTimeout(() => rifiuta(new Error('troppo lento')), ms)),
-  ]);
+    new Promise((_, rifiuta) => {
+      timer = setTimeout(() => {
+        const e = new Error('troppo lento');
+        e.code = 'MOVE_TIMEOUT';
+        rifiuta(e);
+      }, ms);
+    }),
+  ]).finally(() => clearTimeout(timer));
 }
 
-/**
- * DOVE PORTA OGNI STRADA
- *
- * Ogni collegamento fra due foto (NavigationEdge) porta con se'
- * `worldMotionAzimuth`: la direzione geografica REALE dello spostamento da
- * qui alla foto vicina. E` questo il dato giusto per rispondere alla domanda
- * "cosa c'e' davanti a me adesso".
- *
- * Prima confrontavo la bussola del giocatore con il `compassAngle` dello
- * scatto, che su un panorama a 360 gradi indica solo come e` orientata
- * l'immagine e non ha niente a che vedere con la direzione di marcia: da li'
- * il "premo avanti e vado indietro".
- *
- * L'azimut e` in radianti, in senso antiorario a partire da Est. La bussola
- * del visore e` in gradi, in senso orario a partire da Nord. Di qui la
- * conversione.
- */
-function rottaDellEdge(edge) {
-  const az = edge?.data?.worldMotionAzimuth;
-  if (!Number.isFinite(az)) return null;
-  return (90 - (az * 180) / Math.PI + 360) % 360;
-}
-
-/** Differenza fra due rotte, sempre fra 0 e 180 gradi. */
-function scarto(a, b) {
-  return Math.abs(((a - b + 540) % 360) - 180);
-}
-
-/** Tutti i collegamenti disponibili dall'immagine corrente, senza doppioni. */
-function collegamenti(img) {
-  const tutti = [
-    ...(img?.spatialEdges?.edges || []),
-    ...(img?.sequenceEdges?.edges || []),
-  ];
-  const visti = new Set();
-  return tutti.filter((e) => {
-    if (!e || !e.target || visti.has(e.target)) return false;
-    visti.add(e.target);
-    return true;
-  });
-}
-
-// Oltre questo scarto non e' piu' "davanti a me": meglio dire che di la` non
-// si va, piuttosto che spedire il giocatore in una direzione che non aveva
-// chiesto.
-const APERTURA = 100;
-
-/**
- * La foto verso cui andare, scelta in base a dove il giocatore sta guardando.
- * Torna null se in quella direzione non c'e' niente.
- */
-async function bersaglio(forward) {
-  let img;
-  let bussola;
+/** Aspetta che Mapillary abbia caricato le strade collegate alla foto. */
+async function attendiCollegamenti(viewer) {
   try {
-    [img, bussola] = await Promise.all([
-      Promise.resolve(S.viewer.getImage()),
-      Promise.resolve(S.viewer.getBearing()),
-    ]);
-  } catch {
-    return null;
-  }
-  if (typeof bussola !== 'number' || !Number.isFinite(bussola)) return null;
+    const img = await Promise.resolve(viewer.getImage());
+    if (img?.spatialEdges?.cached || img?.sequenceEdges?.cached || S.edgePronti) return;
+  } catch { /* gli eventi sotto restano la rete di sicurezza */ }
 
-  const edges = collegamenti(img);
-  if (!edges.length) return null;
-
-  const voluta = forward ? bussola : (bussola + 180) % 360;
-  let scelto = null;
-  let minimo = Infinity;
-  for (const e of edges) {
-    const rotta = rottaDellEdge(e);
-    if (rotta === null) continue;
-    const d = scarto(rotta, voluta);
-    if (d < minimo) { minimo = d; scelto = e.target; }
-  }
-  return minimo <= APERTURA ? scelto : null;
+  await new Promise((risolvi) => {
+    let finita = false;
+    const pronto = () => {
+      if (finita) return;
+      finita = true;
+      clearTimeout(timer);
+      try { viewer.off?.('spatialedges', pronto); viewer.off?.('sequenceedges', pronto); } catch { /* niente */ }
+      risolvi();
+    };
+    const timer = setTimeout(pronto, EDGE_WAIT_MS);
+    try {
+      viewer.on('spatialedges', pronto);
+      viewer.on('sequenceedges', pronto);
+    } catch { pronto(); }
+  });
 }
 
 /**
  * Un passo nella direzione in cui stai guardando.
  *
- * Si prova nell'ordine: il collegamento geograficamente piu' vicino al tuo
- * sguardo, poi la logica interna di MapillaryJS, poi la sequenza. Il primo
- * tentativo e` quello che deve funzionare quasi sempre; gli altri due sono
- * reti di sicurezza per le immagini con dati incompleti.
- *
- * Finche` un movimento e` in corso i tocchi successivi vengono ignorati, ma
- * il blocco scade comunque da solo: non deve poter restare incastrato.
+ * Si invia una sola richiesta per gesto. StepForward/StepBackward sono le
+ * direzioni pubbliche di Mapillary che rispettano l'inquadratura corrente;
+ * concatenare moveTo, Step e Next faceva partire movimenti contrari e lasciava
+ * vecchie promesse libere di sbloccare una mossa piu` recente.
  */
 async function panoMove(forward) {
   if (!S.viewer || !window.mapillary || !mapillary.NavigationDirection) return;
+  if (S.moveActive) return;
   const ora = Date.now();
-  if (S.inMovimento && ora < (S.movimentoFinoA || 0)) return;
-  S.inMovimento = true;
-  S.movimentoFinoA = ora + 2500;
+  if (ora - (S.ultimaMossa || 0) < 180) return;
+  S.ultimaMossa = ora;
 
   const D = mapillary.NavigationDirection;
   const btn = forward ? $('btn-fwd') : $('btn-back');
+  const id = (S.moveSeq || 0) + 1;
+  S.moveSeq = id;
+  S.moveActive = id;
   btn.classList.add('moving');
   const gen = S.moveGen || 0;
+  $('btn-fwd').disabled = true;
+  $('btn-back').disabled = true;
 
   try {
-    // 1. il collegamento che punta dove stai guardando
-    const dove = await bersaglio(forward);
+    const viewer = S.viewer;
+    await attendiCollegamenti(viewer);
     if (gen !== (S.moveGen || 0)) return;
-    if (dove) {
-      try {
-        await conScadenza(S.viewer.moveTo(dove), MOVE_TIMEOUT_MS);
-        return;
-      } catch { /* non raggiungibile: si prova altro */ }
-    }
-
-    // 2. e 3. reti di sicurezza
-    for (const d of [forward ? D.StepForward : D.StepBackward,
-                     forward ? D.Next : D.Prev]) {
-      if (gen !== (S.moveGen || 0)) return;
-      try {
-        await conScadenza(S.viewer.moveDir(d), MOVE_TIMEOUT_MS);
-        return;
-      } catch { /* direzione non disponibile */ }
-    }
-
-    if (gen !== (S.moveGen || 0)) return;
-    toast(forward ? 'Da questa parte la strada finisce qui.' : 'Da questa parte non si torna oltre.');
+    await conScadenza(viewer.moveDir(forward ? D.StepForward : D.StepBackward), MOVE_TIMEOUT_MS);
+  } catch (e) {
+    if (gen !== (S.moveGen || 0) || S.moveActive !== id) return;
+    toast(e?.code === 'MOVE_TIMEOUT'
+      ? 'Il panorama risponde lentamente. Riprova fra un istante.'
+      : (forward ? 'Da questa parte la strada finisce qui.' : 'Da questa parte non si torna oltre.'));
   } finally {
     btn.classList.remove('moving');
-    if (gen === (S.moveGen || 0)) {
-      S.inMovimento = false;
-      S.movimentoFinoA = 0;
+    if (gen === (S.moveGen || 0) && S.moveActive === id) {
+      S.moveActive = null;
+      if (!S.semplice) {
+        $('btn-fwd').disabled = false;
+        $('btn-back').disabled = false;
+      }
     }
   }
 }
@@ -859,13 +858,13 @@ function ensureMiniMap() {
   if (S.miniMap) return;
   S.miniMap = L.map('minimap', {
     worldCopyJump: true,
-    zoomControl: true,
+    zoomControl: !matchMedia('(pointer: coarse)').matches,
     attributionControl: true,
   }).setView([20, 0], 1);
   L.tileLayer(TILES, { attribution: TILE_ATTR, maxZoom: 18, subdomains: 'abcd' }).addTo(S.miniMap);
 
   S.miniMap.on('click', (e) => {
-    if (S.confirmed) return;
+    if (S.confirmed || S.pendingGuess) return;
     const { lat, lng } = e.latlng;
     S.guess = { lat, lng: ((lng + 540) % 360) - 180 };
     if (S.miniMarker) S.miniMarker.setLatLng(e.latlng);
@@ -953,6 +952,9 @@ const coloreDi = (r, tutti) => r.colore || COLORI[tutti.indexOf(r) % COLORI.leng
 
 function showReveal(msg) {
   clearInterval(S.tickHandle);
+  clearTimeout(S.guessSendTimer);
+  clearTimeout(S.forceTimer);
+  S.pendingGuess = null;
   distruggiViewer(); // il panorama non serve piu`: libera la memoria
   show('screen-reveal');
 
@@ -1563,23 +1565,84 @@ $('btn-leave2').addEventListener('click', leave);
 
 /* ------------------------------------------------------------- gioco UI */
 
-$('btn-confirm').addEventListener('click', () => {
-  if (S.confirmed || !S.guess) return;
+/**
+ * Invia (o reinvia dopo una riconnessione) la bandierina finche` il server non
+ * la conferma. La stessa scelta e` idempotente lato server: una rete mobile
+ * che cade nel momento del tocco non puo` piu` trasformare una risposta in 0.
+ */
+function inviaGuessPendente() {
+  const p = S.pendingGuess;
+  if (!p || S.confirmed || S.screen !== 'screen-play') return;
+  if (S.round && p.roundIndex !== S.round.roundIndex) return;
+
+  const partita = send({
+    type: 'guess',
+    lat: p.lat,
+    lng: p.lng,
+    roundIndex: p.roundIndex,
+    guessId: p.guessId,
+  });
+  $('btn-confirm').disabled = true;
+  $('btn-confirm').textContent = partita ? 'Invio…' : 'Riconnessione…';
+  $('waiting').hidden = false;
+  $('waiting-txt').textContent = partita
+    ? 'Confermo la scelta col server…'
+    : 'Connessione assente: tengo la scelta e riprovo…';
+  $('countdown').hidden = true;
+
+  clearTimeout(S.guessSendTimer);
+  S.guessSendTimer = setTimeout(() => {
+    if (!S.pendingGuess || S.confirmed) return;
+    riaggancia();
+    inviaGuessPendente();
+  }, 1800);
+}
+
+function riceviGuessAck(msg) {
+  const roundIndex = Number(msg.roundIndex);
+  const corrente = S.round ? Number(S.round.roundIndex) : roundIndex;
+  if (Number.isFinite(roundIndex) && Number.isFinite(corrente) && roundIndex !== corrente) return;
+  if (!S.pendingGuess && S.screen !== 'screen-play') return;
+  if (msg.accepted && S.confirmed && !S.pendingGuess) return;
+
+  if (!msg.accepted) {
+    clearTimeout(S.guessSendTimer);
+    S.pendingGuess = null;
+    S.confirmed = false;
+    $('waiting').hidden = true;
+    $('btn-confirm').disabled = !S.guess;
+    $('btn-confirm').textContent = S.guess ? 'Riprova la conferma' : 'Metti il segnalino';
+    toast('Il server non ha accettato la scelta: riprova.');
+    return;
+  }
+
+  const eraPendente = !!S.pendingGuess;
+  clearTimeout(S.guessSendTimer);
+  S.pendingGuess = null;
   S.confirmed = true;
   $('btn-confirm').disabled = true;
   $('btn-confirm').textContent = 'Scelta inviata';
   $('waiting').hidden = false;
   $('countdown').hidden = true;
-  Suoni.conferma();
-  send({ type: 'guess', lat: S.guess.lat, lng: S.guess.lng });
+  if (eraPendente && S.screen === 'screen-play') Suoni.conferma();
 
-  // Se l'attesa si prolunga, offri la via d'uscita: capita che l'altro abbia
-  // messo via il telefono e il server non se ne sia ancora accorto.
   clearTimeout(S.forceTimer);
   $('btn-force').hidden = true;
   S.forceTimer = setTimeout(() => {
     if (S.screen === 'screen-play' && S.confirmed) $('btn-force').hidden = false;
   }, 12000);
+}
+
+$('btn-confirm').addEventListener('click', () => {
+  if (S.confirmed || S.pendingGuess || !S.guess) return;
+  const id = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random()}`;
+  S.pendingGuess = {
+    lat: S.guess.lat,
+    lng: S.guess.lng,
+    roundIndex: S.round?.roundIndex,
+    guessId: id,
+  };
+  inviaGuessPendente();
 });
 
 $('btn-force').addEventListener('click', () => {
@@ -1694,9 +1757,9 @@ $('btn-fwd').addEventListener('click', () => panoMove(true));
 $('btn-back').addEventListener('click', () => panoMove(false));
 
 /**
- * Safari su iOS ignora "user-scalable=no" e lascia zoomare la PAGINA con due
- * dita. Con un'interfaccia a posizione fissa come questa, una volta zoomati i
- * pulsanti finiscono fuori schermo e non si riesce piu' a fare niente.
+ * Safari su iOS espone anche gesture proprie. Durante il round vanno fermate
+ * perche` la pinzata appartiene al panorama o alla mappa; fuori dal gioco lo
+ * zoom della pagina resta invece disponibile per l'accessibilita`.
  *
  * Gli eventi gesture* sono la sola leva che Safari offre per impedirlo. Non
  * toccano i touchmove, quindi la pinzata continua a zoomare il panorama e la
@@ -1706,10 +1769,17 @@ $('btn-back').addEventListener('click', () => panoMove(false));
 // propagazione dei gesti, quindi un ascolto normale non li vedeva mai
 // arrivare. E` probabilmente il motivo per cui questa difesa non funzionava.
 for (const tipo of ['gesturestart', 'gesturechange', 'gestureend']) {
-  document.addEventListener(tipo, (e) => e.preventDefault(), { passive: false, capture: true });
+  document.addEventListener(tipo, (e) => {
+    if (S.screen === 'screen-play') e.preventDefault();
+  }, { passive: false, capture: true });
 }
-// Doppio tocco: l'altro modo per zoomare una pagina.
-document.addEventListener('dblclick', (e) => e.preventDefault(), { passive: false, capture: true });
+// Col mouse il doppio clic equivale al doppio tocco e ripristina il panorama.
+document.addEventListener('dblclick', (e) => {
+  if (S.screen !== 'screen-play' || !e.target.closest?.('#pano')) return;
+  e.preventDefault();
+  resetVista();
+  toast('Visuale rimessa a posto');
+}, { passive: false, capture: true });
 
 /**
  * Rete di sicurezza per i browser che ignorano tutto il resto: se due dita si
@@ -1717,6 +1787,7 @@ document.addEventListener('dblclick', (e) => e.preventDefault(), { passive: fals
  * mappe), la pinzata viene annullata sul nascere.
  */
 document.addEventListener('touchmove', (e) => {
+  if (S.screen !== 'screen-play') return;
   if (e.touches.length < 2) return;
   if (e.target.closest && e.target.closest('#pano, .leaflet-container')) return;
   e.preventDefault();
@@ -1730,11 +1801,11 @@ document.addEventListener('touchmove', (e) => {
 function sbloccaPagina() {
   const vp = $('viewport');
   if (!vp) return;
-  // Il trucco sta nel CAMBIARE il contenuto: le due varianti sono entrambe
-  // valide e vietano lo zoom, ma l'alternanza forza il browser a rifare i conti.
-  const base = 'width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no';
-  vp.setAttribute('content', `${base}, minimum-scale=1`);
-  setTimeout(() => vp.setAttribute('content', `${base}, viewport-fit=cover`), 60);
+  // Una breve variante forza Safari a rifare i conti; subito dopo si ripristina
+  // il viewport accessibile usato nel resto dell'app.
+  const libero = 'width=device-width, initial-scale=1, viewport-fit=cover';
+  vp.setAttribute('content', 'width=device-width, initial-scale=1, maximum-scale=1, minimum-scale=1');
+  setTimeout(() => vp.setAttribute('content', libero), 60);
   window.scrollTo(0, 0);
   document.documentElement.scrollLeft = 0;
   document.documentElement.scrollTop = 0;
@@ -1793,14 +1864,50 @@ async function resetVista({ tornaAlPunto = false } = {}) {
   controlla();
 })();
 
-/** Doppio tocco sul panorama: rimette tutto a posto senza cercare pulsanti. */
+/**
+ * Doppio tocco sul panorama: rimette tutto a posto senza cercare pulsanti.
+ * Una pinzata produce due pointerup quasi simultanei: il vecchio contatore la
+ * scambiava per un doppio tocco e azzerava proprio lo zoom appena richiesto.
+ */
 (function doppioTocco() {
-  let ultimo = 0;
-  $('pano').addEventListener('pointerup', () => {
-    const ora = Date.now();
-    if (ora - ultimo < 320) { resetVista(); toast('Visuale rimessa a posto'); }
-    ultimo = ora;
+  const pano = $('pano');
+  const attivi = new Set();
+  let gesto = null;
+  let ultimo = null;
+
+  pano.addEventListener('pointerdown', (e) => {
+    if (e.pointerType === 'mouse') return;
+    if (!attivi.size) gesto = { id: e.pointerId, x: e.clientX, y: e.clientY, t: Date.now(), multiplo: false, mosso: false };
+    attivi.add(e.pointerId);
+    if (attivi.size > 1 && gesto) gesto.multiplo = true;
   });
+  pano.addEventListener('pointermove', (e) => {
+    if (!gesto || e.pointerId !== gesto.id) return;
+    if (Math.hypot(e.clientX - gesto.x, e.clientY - gesto.y) > 14) gesto.mosso = true;
+  });
+  const fine = (e) => {
+    if (e.pointerType === 'mouse') return;
+    const eraPrimo = gesto && e.pointerId === gesto.id;
+    const singolo = e.type === 'pointerup' && eraPrimo && attivi.size === 1
+      && !gesto.multiplo && !gesto.mosso && Date.now() - gesto.t < 300;
+    attivi.delete(e.pointerId);
+
+    if (singolo) {
+      const tap = { x: e.clientX, y: e.clientY, t: Date.now() };
+      if (ultimo && tap.t - ultimo.t < 340 && Math.hypot(tap.x - ultimo.x, tap.y - ultimo.y) < 34) {
+        ultimo = null;
+        resetVista();
+        toast('Visuale rimessa a posto');
+      } else {
+        ultimo = tap;
+      }
+    } else if (gesto?.multiplo) {
+      ultimo = null;
+    }
+    if (!attivi.size) gesto = null;
+  };
+  pano.addEventListener('pointerup', fine);
+  pano.addEventListener('pointercancel', fine);
 })();
 
 $('btn-zoomout').addEventListener('click', async () => {
@@ -1835,10 +1942,18 @@ document.addEventListener('keydown', (e) => {
 
 $('btn-home-pano').addEventListener('click', () => resetVista({ tornaAlPunto: true }));
 
-$('btn-fs').addEventListener('click', () => {
-  if (document.fullscreenElement) document.exitFullscreen();
-  else document.documentElement.requestFullscreen().catch(() => {});
-});
+const chiediFullscreen = document.documentElement.requestFullscreen
+  || document.documentElement.webkitRequestFullscreen;
+const esciFullscreen = document.exitFullscreen || document.webkitExitFullscreen;
+if (!chiediFullscreen || matchMedia('(display-mode: standalone)').matches) {
+  $('btn-fs').hidden = true;
+} else {
+  $('btn-fs').addEventListener('click', () => {
+    const attivo = document.fullscreenElement || document.webkitFullscreenElement;
+    const operazione = attivo ? esciFullscreen?.call(document) : chiediFullscreen.call(document.documentElement);
+    Promise.resolve(operazione).catch(() => toast('Schermo intero non disponibile.'));
+  });
+}
 
 // su touch la minimappa e' opaca finche' non la tocchi
 $('guessbox').addEventListener('touchstart', () => $('guessbox').classList.add('touched'), { passive: true });
@@ -1848,7 +1963,10 @@ $('guessbox').addEventListener('touchstart', () => $('guessbox').classList.add('
 // Il service worker serve anche solo a rendere il gioco installabile.
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
-    navigator.serviceWorker.register('sw.js').catch(() => { /* pazienza */ });
+    const src = document.querySelector('script[src*="app.js"]')?.src;
+    const versione = src ? new URL(src).searchParams.get('v') : '';
+    navigator.serviceWorker.register(`sw.js${versione ? `?v=${encodeURIComponent(versione)}` : ''}`)
+      .catch(() => { /* pazienza */ });
   });
 }
 

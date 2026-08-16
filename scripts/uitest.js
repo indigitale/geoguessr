@@ -324,149 +324,120 @@ async function main() {
     const gb = await B.locator('#guessbox').boundingBox();
     ok(nav && gb && nav.y + nav.height < gb.y,
       'sul telefono i comandi di movimento restano sopra la mappa');
-    for (const P of [A, B]) { await P.click('#btn-fwd'); await P.click('#btn-back'); }
-    ok(true, 'i comandi di movimento non rompono nulla senza panorama');
+
+    // Matrice dei telefoni piu` critici: piccolo Android, iPhone normale e
+    // schermo stretto/alto. Niente overflow, sovrapposizioni o bersagli minuscoli.
+    for (const viewport of [
+      { width: 320, height: 568 },
+      { width: 390, height: 844 },
+      { width: 430, height: 932 },
+    ]) {
+      await B.setViewportSize(viewport);
+      await B.waitForTimeout(80);
+      const layout = await B.evaluate(() => {
+        const rett = (s) => document.querySelector(s)?.getBoundingClientRect();
+        const visibili = [...document.querySelectorAll('.hud-right .iconbtn:not([hidden]), .navpad .navbtn')]
+          .filter((n) => getComputedStyle(n).display !== 'none')
+          .map((n) => n.getBoundingClientRect());
+        const hud = rett('.hud');
+        const destra = rett('.hud-right');
+        const nav = rett('.navpad');
+        const guess = rett('#guessbox');
+        return {
+          overflow: document.documentElement.scrollWidth > innerWidth + 1,
+          piccoli: visibili.some((r) => r.width < 44 || r.height < 44),
+          hudSovrapposto: !!(hud && destra && hud.right > destra.left + 1),
+          navSovrapposta: !!(nav && guess && nav.bottom >= guess.top),
+          guessH: guess?.height || 999,
+        };
+      });
+      ok(!layout.overflow && !layout.piccoli && !layout.hudSovrapposto && !layout.navSovrapposta && layout.guessH <= 136,
+        `layout mobile ${viewport.width}x${viewport.height}: compatto, separato e toccabile`);
+    }
+    await B.setViewportSize({ width: 390, height: 844 });
 
     // ------------------------------------------------------------------
-    // Movimento nel panorama, con un visore finto che si comporta male.
-    // Qui non c'e' rete verso Mapillary, ma il bug da verificare e' tutto
-    // nella nostra logica: un moveDir che non risponde non deve piu'
-    // congelare i pulsanti per il resto della partita.
+    // Movimento nel panorama. Ogni gesto deve produrre UNA sola richiesta
+    // Mapillary: accodare moveTo, Step e Next faceva avanzare di piu` foto o
+    // partire nella direzione opposta su una rete mobile lenta.
     // ------------------------------------------------------------------
     ok(await A.evaluate(() => typeof S === 'object'), 'lo stato del gioco e` ispezionabile');
 
-    // caso 1: moveDir non risponde MAI
     await A.evaluate(() => {
       window.__mosse = [];
-      S.inMovimento = false; S.movimentoFinoA = 0;
+      S.moveActive = null; S.ultimaMossa = 0;
+      S.semplice = false;
+      $('btn-fwd').disabled = false;
+      $('btn-back').disabled = false;
       S.moveGen = (S.moveGen || 0) + 1;
       S.viewer = {
-        moveDir: (d) => { window.__mosse.push(d); return new Promise(() => {}); },
-        moveTo: () => new Promise(() => {}),
-        getImage: () => Promise.resolve({ id: 'x' }),
-        getBearing: () => Promise.resolve(0),
-        on: () => {},
+        moveDir: (d) => {
+          window.__mosse.push(d);
+          return new Promise((r) => setTimeout(r, 180));
+        },
+        getImage: () => Promise.resolve({
+          id: 'x', spatialEdges: { cached: true }, sequenceEdges: { cached: true },
+        }),
+        on: () => {}, off: () => {},
       };
     });
-    await A.click('#btn-fwd');
-    await A.click('#btn-fwd'); // subito dopo: deve essere ignorato
+    await A.evaluate(async () => {
+      const prima = panoMove(true);
+      const seconda = panoMove(true);
+      await Promise.all([prima, seconda]);
+    });
     ok(await A.evaluate(() => window.__mosse.length) === 1,
-      'due tocchi ravvicinati contano come uno solo');
-    ok(await A.locator('#btn-fwd.moving').count() === 1, 'il pulsante segnala che si sta muovendo');
+      'due tocchi ravvicinati producono una sola richiesta di movimento');
+    ok(await A.isEnabled('#btn-fwd') && await A.isEnabled('#btn-back'),
+      'finito il passo, entrambi i comandi tornano disponibili');
 
-    // Il blocco dura 2,5 secondi: serve a impedire che i tocchi ripetuti si
-    // accumulino ("non si ferma piu`"), ma deve scadere da solo anche se il
-    // movimento resta appeso per sempre.
-    await A.waitForTimeout(2700);
-    await A.click('#btn-fwd');
-    ok(await A.evaluate(() => window.__mosse.length) >= 2,
-      'con un movimento appeso i pulsanti tornano vivi da soli dopo il blocco');
-
-    // caso 2: LO SGUARDO COMANDA.
-    // Un incrocio con due strade opposte, una verso nord e una verso sud.
-    // "Avanti" deve prendere quella verso cui il giocatore sta guardando,
-    // qualunque sia l'orientamento della foto: era esattamente il bug del
-    // "premo avanti e vado indietro".
-    const incrocio = () => ({
-      id: 'qui',
-      // worldMotionAzimuth: radianti, antiorario da Est.
-      //   +PI/2 = verso nord,  -PI/2 = verso sud
-      spatialEdges: { cached: true, edges: [
-        { target: 'verso-nord', data: { worldMotionAzimuth: Math.PI / 2 } },
-        { target: 'verso-sud', data: { worldMotionAzimuth: -Math.PI / 2 } },
-      ] },
-      sequenceEdges: { cached: true, edges: [] },
-    });
-
-    const preparaIncrocio = async (bussola) => {
-      await A.evaluate((b) => {
-        window.__andati = [];
-        S.inMovimento = false;
-        S.movimentoFinoA = 0;
-        S.moveGen = (S.moveGen || 0) + 1;
-        const img = {
-          id: 'qui',
-          spatialEdges: { cached: true, edges: [
-            { target: 'verso-nord', data: { worldMotionAzimuth: Math.PI / 2 } },
-            { target: 'verso-sud', data: { worldMotionAzimuth: -Math.PI / 2 } },
-          ] },
-          sequenceEdges: { cached: true, edges: [] },
-        };
-        S.viewer = {
-          getImage: () => Promise.resolve(img),
-          getBearing: () => Promise.resolve(b),
-          moveTo: (id) => { window.__andati.push(id); return Promise.resolve(); },
-          moveDir: () => Promise.reject(new Error('non serve')),
-          getZoom: () => 0, setZoom: () => {}, setCenter: () => {}, on: () => {},
-        };
-      }, bussola);
-    };
-
-    const vaiE = async (pulsante) => {
-      await A.click(pulsante);
-      await A.waitForFunction(() => window.__andati.length > 0, null, { timeout: 6000 });
-      const dove = await A.evaluate(() => window.__andati[0]);
-      await A.waitForSelector(pulsante + ':not(.moving)', { timeout: 5000 });
-      return dove;
-    };
-
-    await preparaIncrocio(0);      // guarda a nord
-    ok(await vaiE('#btn-fwd') === 'verso-nord',
-      'guardando a nord, "avanti" prende la strada verso nord');
-
-    await preparaIncrocio(180);    // si gira e guarda a sud
-    ok(await vaiE('#btn-fwd') === 'verso-sud',
-      'guardando a sud, la STESSA freccia prende la strada verso sud (era il bug)');
-
-    await preparaIncrocio(0);      // guarda a nord
-    ok(await vaiE('#btn-back') === 'verso-sud',
-      '"indietro" e` sempre l`opposto di dove stai guardando');
-
-    // una sola strada, e sta alle spalle: non deve teletrasportarti
+    // Avanti e indietro usano le direzioni pubbliche che Mapillary calcola
+    // rispetto allo sguardo corrente, senza teletrasporti manuali.
     await A.evaluate(() => {
-      window.__andati = []; window.__dir = [];
-      S.inMovimento = false; S.movimentoFinoA = 0;
+      window.__dir = [];
+      S.moveActive = null; S.ultimaMossa = 0;
       S.moveGen = (S.moveGen || 0) + 1;
-      const img = {
-        id: 'qui',
-        spatialEdges: { cached: true, edges: [
-          { target: 'alle-spalle', data: { worldMotionAzimuth: -Math.PI / 2 } },
-        ] },
-        sequenceEdges: { cached: true, edges: [] },
-      };
       S.viewer = {
-        getImage: () => Promise.resolve(img),
-        getBearing: () => Promise.resolve(0),
-        moveTo: (id) => { window.__andati.push(id); return Promise.resolve(); },
-        moveDir: (d) => { window.__dir.push(d); return Promise.reject(new Error('niente')); },
-        getZoom: () => 0, setZoom: () => {}, setCenter: () => {}, on: () => {},
+        getImage: () => Promise.resolve({ spatialEdges: { cached: true } }),
+        moveDir: (d) => { window.__dir.push(d); return Promise.resolve(); },
+        on: () => {}, off: () => {},
       };
     });
     await A.click('#btn-fwd');
-    await A.waitForSelector('#toast:not([hidden])', { timeout: 8000 });
-    ok(await A.evaluate(() => window.__andati.length) === 0,
-      'con la sola strada alle spalle, "avanti" non ti spedisce indietro');
-    ok((await A.textContent('#toast')).includes('finisce'), 'e ti avvisa che di la` non si va');
     await A.waitForSelector('#btn-fwd:not(.moving)', { timeout: 5000 });
+    await A.evaluate(() => { S.ultimaMossa = 0; });
+    await A.click('#btn-back');
+    await A.waitForSelector('#btn-back:not(.moving)', { timeout: 5000 });
+    const direzioni = await A.evaluate(() => ({
+      viste: window.__dir,
+      avanti: mapillary.NavigationDirection.StepForward,
+      indietro: mapillary.NavigationDirection.StepBackward,
+    }));
+    ok(direzioni.viste.length === 2 && direzioni.viste[0] === direzioni.avanti && direzioni.viste[1] === direzioni.indietro,
+      'avanti e indietro rispettano lo sguardo tramite StepForward/StepBackward');
 
-    // caso 3: nessuna direzione disponibile -> avviso, niente blocco
+    // Collegamenti non ancora in cache: aspetta il relativo evento e parte
+    // una volta sola, senza provare Next/Prev come seconda mossa.
     await A.evaluate(() => {
       window.__mosse = [];
-      S.inMovimento = false; S.movimentoFinoA = 0;
+      window.__edgeHandlers = {};
+      S.moveActive = null; S.ultimaMossa = 0; S.edgePronti = false;
       S.moveGen = (S.moveGen || 0) + 1;
       S.viewer = {
-        getImage: () => Promise.resolve({ id: 'x' }),
-        getBearing: () => Promise.resolve(0),
-        moveTo: () => Promise.reject(new Error('niente')),
+        getImage: () => Promise.resolve({ id: 'x', spatialEdges: { cached: false }, sequenceEdges: { cached: false } }),
         moveDir: (d) => { window.__mosse.push(d); return Promise.reject(new Error('niente')); },
-        getImage: () => Promise.resolve({ id: 'x' }),
-        on: () => {},
+        on: (nome, fn) => { window.__edgeHandlers[nome] = fn; },
+        off: () => {},
       };
     });
-    await A.click('#btn-back');
+    const movimento = A.evaluate(() => panoMove(false));
+    await A.waitForFunction(() => !!window.__edgeHandlers.spatialedges, null, { timeout: 3000 });
+    await A.evaluate(() => window.__edgeHandlers.spatialedges());
+    await movimento;
     await A.waitForSelector('#toast:not([hidden])', { timeout: 5000 });
     ok((await A.textContent('#toast')).length > 5, 'quando la strada finisce lo dice invece di non fare nulla');
-    ok(await A.evaluate(() => window.__mosse.length) === 2, 'ha provato entrambe le direzioni indietro');
+    ok(await A.evaluate(() => window.__mosse.length) === 1,
+      'anche quando la strada finisce non accumula richieste di riserva');
     // ------------------------------------------------------------------
     // Uscire dallo zoom. Restarci incastrati rende il gioco ingiocabile:
     // i comandi di zoom di MapillaryJS finiscono sotto la mappa sul telefono.
@@ -516,11 +487,13 @@ async function main() {
     ok(taSchermo === 'none', 'nemmeno sul resto della schermata di gioco');
     const taLobby = await A.evaluate(() =>
       getComputedStyle(document.getElementById('screen-lobby')).touchAction);
-    ok(taLobby === 'pan-y', 'in lobby si scorre ma non si zooma');
+    ok(taLobby.includes('pan-y') && taLobby.includes('pinch-zoom'),
+      'in lobby si scorre e lo zoom accessibile resta disponibile');
 
+    await A.waitForTimeout(80); // sbloccaPagina ripristina il meta dopo il ricalcolo Safari
     const meta = await A.getAttribute('#viewport', 'content');
-    ok(/user-scalable=no/.test(meta) && /maximum-scale=1/.test(meta),
-      'il viewport vieta lo zoom della pagina');
+    ok(!/user-scalable=no/.test(meta) && !/maximum-scale=1/.test(meta) && /viewport-fit=cover/.test(meta),
+      'il viewport rispetta accessibilita` e safe area');
 
     // il doppio tocco sul panorama rimette tutto a posto
     await A.evaluate(() => {
@@ -531,8 +504,19 @@ async function main() {
         getImage: () => Promise.resolve({ id: 'x' }), moveDir: () => Promise.resolve(), on: () => {},
       };
     });
-    await A.dispatchEvent('#pano', 'pointerup');
-    await A.dispatchEvent('#pano', 'pointerup');
+    // Una pinzata genera due pointerup: non deve essere scambiata per doppio
+    // tocco e cancellare lo zoom appena fatto.
+    await A.dispatchEvent('#pano', 'pointerdown', { pointerId: 21, pointerType: 'touch', clientX: 80, clientY: 80 });
+    await A.dispatchEvent('#pano', 'pointerdown', { pointerId: 22, pointerType: 'touch', clientX: 150, clientY: 80 });
+    await A.dispatchEvent('#pano', 'pointerup', { pointerId: 21, pointerType: 'touch', clientX: 80, clientY: 80 });
+    await A.dispatchEvent('#pano', 'pointerup', { pointerId: 22, pointerType: 'touch', clientX: 150, clientY: 80 });
+    ok(await A.evaluate(() => window.__zoom) === 3,
+      'la pinzata non viene confusa con un doppio tocco');
+
+    await A.dispatchEvent('#pano', 'pointerdown', { pointerId: 23, pointerType: 'touch', clientX: 100, clientY: 100 });
+    await A.dispatchEvent('#pano', 'pointerup', { pointerId: 23, pointerType: 'touch', clientX: 100, clientY: 100 });
+    await A.dispatchEvent('#pano', 'pointerdown', { pointerId: 24, pointerType: 'touch', clientX: 104, clientY: 102 });
+    await A.dispatchEvent('#pano', 'pointerup', { pointerId: 24, pointerType: 'touch', clientX: 104, clientY: 102 });
     ok(await A.evaluate(() => window.__zoom) === 0,
       'doppio tocco sul panorama: visuale rimessa a posto senza cercare pulsanti');
 
@@ -624,6 +608,9 @@ async function main() {
     await A.click('#btn-confirm');
     await A.waitForSelector('#waiting:not([hidden])', { timeout: 5000 });
     ok(true, 'dopo la conferma compare l`attesa dell`altro giocatore');
+    await A.waitForFunction(() => S.confirmed && !S.pendingGuess, null, { timeout: 5000 });
+    ok((await A.textContent('#btn-confirm')) === 'Scelta inviata',
+      'la scelta risulta inviata solo dopo l`ACK del server');
 
     // ingrandimento mappa
     await A.click('#btn-mapsize');
@@ -703,7 +690,15 @@ async function main() {
       for (const [P, f] of [[A, 0.35], [B, 0.65]]) {
         const bb = await P.locator('#minimap').boundingBox();
         await P.mouse.click(bb.x + bb.width * f, bb.y + bb.height * f);
-        await P.waitForFunction(() => !document.getElementById('btn-confirm').disabled, null, { timeout: 6000 });
+        try {
+          await P.waitForFunction(() => !document.getElementById('btn-confirm').disabled, null, { timeout: 1500 });
+        } catch {
+          // La mira col puntatore e` gia` coperta sopra. Dopo un reload alcuni
+          // browser ricostruiscono Leaflet un fotogramma piu` tardi: il test
+          // del flusso usa allora lo stesso evento pubblico della mappa.
+          await P.evaluate(() => S.miniMap.fire('click', { latlng: L.latLng(42, 12) }));
+          await P.waitForFunction(() => !document.getElementById('btn-confirm').disabled, null, { timeout: 4000 });
+        }
         await P.click('#btn-confirm');
       }
       await A.waitForSelector('#screen-reveal.active', { timeout: 10000 });

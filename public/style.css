@@ -50,6 +50,10 @@ html, body {
 }
 
 button { font-family: inherit; }
+button:focus-visible, input:focus-visible, a:focus-visible {
+  outline: 3px solid var(--blue);
+  outline-offset: 2px;
+}
 
 /* ---------------------------------------------------------- schermate */
 
@@ -58,6 +62,7 @@ button { font-family: inherit; }
 
 .screen:not(.full) {
   min-height: 100%;
+  min-height: 100dvh;
   display: none;
   place-items: center;
   padding: 24px 16px 48px;
@@ -67,12 +72,11 @@ button { font-family: inherit; }
 /* Schermate a tutto schermo: gioco, risultato del round, finale.
    touch-action: none toglie al browser OGNI gesto, pinzata compresa: qui non
    c'e' niente da scorrere e i gesti li gestiscono MapillaryJS e Leaflet. */
-.screen.full { position: fixed; inset: 0; touch-action: none; }
+.screen.full { position: fixed; inset: 0; height: 100dvh; touch-action: none; }
 .screen.full.active { display: block; }
 
-/* Le schermate a scheda invece devono poter scorrere in verticale, ma non
-   zoomare: pan-y concede l'uno e nega l'altra. */
-.screen:not(.full) { touch-action: pan-y; }
+/* Le schermate a scheda scorrono e restano ingrandibili per accessibilita`. */
+.screen:not(.full) { touch-action: pan-y pinch-zoom; }
 
 .card {
   width: 100%;
@@ -270,7 +274,7 @@ button.ghost.small { width: 100%; margin-top: 14px; font-size: 13px; color: var(
 .hud {
   position: absolute;
   top: max(12px, env(safe-area-inset-top));
-  left: 12px;
+  left: max(12px, env(safe-area-inset-left));
   display: flex;
   gap: 8px;
   z-index: 20;
@@ -285,7 +289,7 @@ button.ghost.small { width: 100%; margin-top: 14px; font-size: 13px; color: var(
 .hud-right {
   position: absolute;
   top: max(12px, env(safe-area-inset-top));
-  right: 12px;
+  right: max(12px, env(safe-area-inset-right));
   display: flex;
   gap: 8px;
   z-index: 20;
@@ -358,7 +362,7 @@ a.vaia:hover { text-decoration: underline; }
 
 .guessbox {
   position: absolute;
-  right: 12px;
+  right: max(12px, env(safe-area-inset-right));
   bottom: max(12px, env(safe-area-inset-bottom));
   width: 300px;
   z-index: 25;
@@ -391,7 +395,7 @@ a.vaia:hover { text-decoration: underline; }
    grandi, in un punto che non collide con niente. */
 .navpad {
   position: absolute;
-  left: 12px;
+  left: max(12px, env(safe-area-inset-left));
   top: 50%;
   transform: translateY(-50%);
   display: flex;
@@ -945,45 +949,59 @@ a.vaia:hover { text-decoration: underline; }
   /* Su schermo stretto la riga dei dati finiva sotto i pulsanti in alto a
      destra: la zona si legge gia` in lobby, qui si puo` togliere. */
   .hud-scope { display: none; }
-  /* Lo spazio riservato ai pulsanti di destra va RIFATTO ogni volta che se ne
-     aggiunge uno: 12px di margine + quattro da 34px con tre spazi da 8px +
-     12px a destra + 8px d'aria = 192. Era rimasto a 140, tarato su tre
-     pulsanti, e su un telefono vero il timer copriva il "?". */
-  .hud { max-width: calc(100% - 192px); }
-  .hud-pill { padding: 6px 10px; font-size: 12.5px; }
-  .iconbtn { width: 34px; height: 34px; font-size: 15px; }
+  /* Bersagli da almeno 44 px: abbastanza grandi per il pollice. */
+  .hud { max-width: calc(100% - 216px); gap: 5px; }
+  .hud-right { gap: 4px; }
+  .hud-pill { min-height: 34px; padding: 6px 9px; font-size: 12.5px; }
+  .iconbtn { width: 44px; height: 44px; font-size: 17px; }
 
   /* L'avviso a scomparsa stava sopra i pulsanti della mappa. */
   .toast { bottom: auto; top: 30%; max-width: calc(100vw - 40px); }
   .roomcode { font-size: 44px; }
 
-  /* La mappa resta larga (per mirare col pollice serve spazio) ma bassa e
-     discreta: al primo tocco si accende, con "Ingrandisci" riempie lo
-     schermo. Prima era alta e sempre opaca: copriva mezzo panorama. */
-  .guessbox { left: 12px; right: 12px; width: auto; opacity: .6; }
-  #minimap { height: 134px; }
+  /* Mappa e azioni affiancate: stessa precisione, molta meno altezza rubata
+     al panorama. Per mirare davvero resta disponibile la vista ingrandita. */
+  .guessbox {
+    left: max(10px, env(safe-area-inset-left));
+    right: max(10px, env(safe-area-inset-right));
+    width: auto;
+    display: grid;
+    grid-template-columns: minmax(108px, 128px) minmax(0, 1fr);
+    gap: 8px;
+    opacity: .78;
+  }
+  #minimap { height: 112px; }
+  .guessbar { flex-direction: column; gap: 6px; margin-top: 0; min-width: 0; }
+  .guessbar .primary, .guessbar .ghost {
+    min-height: 52px;
+    padding: 7px 8px;
+    font-size: 13px;
+    line-height: 1.15;
+  }
+  .guessbar button.ghost.small { margin: 0; }
 
-  /* I comandi di movimento si ancorano SOPRA la mappa invece che a meta'
-     schermo: a meta' schermo, con la barra dei browser mobili che ruba
-     altezza, la freccia in giu' finiva mezza nascosta sotto la mappa. */
+  /* Movimento in una riga sopra la mappa: raggiungibile senza coprire mezza
+     altezza del telefono. */
   .navbtn { width: 52px; height: 52px; font-size: 24px; }
-  .navbtn.small { width: 42px; height: 42px; font-size: 20px; }
+  .navbtn.small { width: 46px; height: 46px; font-size: 20px; margin-top: 0; }
   .navpad {
     top: auto;
     transform: none;
-    /* 134 di mappa + 16 di cornice + ~54 di barra + 12 dal fondo + 12 d'aria */
-    bottom: calc(max(12px, env(safe-area-inset-bottom)) + 228px);
+    flex-direction: row;
+    bottom: calc(max(10px, env(safe-area-inset-bottom)) + 140px);
   }
+  .navlabel { display: none; }
 
   /* Sul telefono "Ingrandisci" apre la mappa quasi a tutto schermo: su un
      riquadro da 150px non si azzecca niente. */
   .guessbox.big {
-    inset: max(8px, env(safe-area-inset-top)) 8px max(8px, env(safe-area-inset-bottom)) 8px;
+    inset: max(8px, env(safe-area-inset-top)) max(8px, env(safe-area-inset-right)) max(8px, env(safe-area-inset-bottom)) max(8px, env(safe-area-inset-left));
     width: auto;
     display: flex;
     flex-direction: column;
   }
   .guessbox.big #minimap { flex: 1; height: auto; }
+  .guessbox.big .guessbar { flex-direction: row; margin-top: 8px; }
 
   .reveal-wrap { flex-direction: column; }
   #revealmap, #finalmap { flex: 1 1 45%; min-height: 40vh; }
@@ -996,11 +1014,31 @@ a.vaia:hover { text-decoration: underline; }
   }
 }
 
+@media (max-width: 340px) {
+  /* Su 320 px il quarto comando toglierebbe spazio al timer; lo schermo
+     intero resta disponibile dal browser o dall'app installata. */
+  #btn-fs { display: none; }
+  .hud { max-width: calc(100% - 166px); }
+  .guessbox { grid-template-columns: 106px minmax(0, 1fr); }
+}
+
 /* Telefono in ORIZZONTALE: di altezza ce n'e' poca, di larghezza tanta.
    La mappa torna un riquadro compatto a destra e i comandi tornano a meta'
    del bordo sinistro, dove non danno fastidio a nessuno. */
 @media (max-height: 450px) {
-  .navpad { top: 50%; bottom: auto; transform: translateY(-50%); }
-  .guessbox { left: auto; right: 12px; width: 240px; opacity: .6; }
+  .navpad {
+    top: 50%;
+    bottom: auto;
+    transform: translateY(-50%);
+    flex-direction: column;
+  }
+  .guessbox {
+    left: auto;
+    right: max(12px, env(safe-area-inset-right));
+    width: 240px;
+    display: block;
+    opacity: .72;
+  }
   #minimap { height: 110px; }
+  .guessbar { flex-direction: row; margin-top: 8px; }
 }
